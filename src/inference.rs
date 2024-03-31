@@ -299,8 +299,6 @@ impl<'a> InferenceContext<'a> {
       .try_strip_all_monomorphic_stub_layers(self.symbol_table)
       .unwrap();
 
-    assert!(!stripped_type.is_a_generic());
-
     InferenceResult {
       constraints: self.constraints,
       universe_id: self.own_universe_id,
