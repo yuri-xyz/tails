@@ -4,7 +4,7 @@
 
 use crate::{
   ast,
-  symbol_table::{self, SubstitutionEnv, SubstitutionId},
+  symbol_table::{self, SubstitutionEnv},
 };
 
 /// Object fields must be an ordered map (such as a binary tree map),
@@ -79,7 +79,6 @@ pub struct SignatureType {
 pub struct StubType {
   pub universe_id: symbol_table::UniverseId,
   pub path: ast::Path,
-  pub generic_hints: Vec<Type>,
 }
 
 impl StubType {
@@ -112,11 +111,6 @@ impl StubType {
         return Err(TypeStripError::RecursionDetected);
       }
 
-      // Only strip away stub types that have no generic hints (monomorphic stub types).
-      if !current.generic_hints.is_empty() {
-        return Ok(Type::Stub(current));
-      }
-
       seen_stub_types.insert(current.universe_id.to_owned());
 
       let target_registry_item = symbol_table
@@ -126,26 +120,7 @@ impl StubType {
       let next = match target_registry_item {
         // TODO: Handle unions case.
         symbol_table::RegistryItem::Union(union) => todo!(),
-        symbol_table::RegistryItem::GenericType(generic_type) => {
-          Type::Generic(generic_type.to_owned())
-        }
-        symbol_table::RegistryItem::TypeDef(type_def) => {
-          // If the target type def. is polymorphic, then it falls outside of the
-          // scope of this function, and thus the current stub type should be returned,
-          // which may be further processed by the caller. It should be noted that by
-          // this point, the current stub type was already checked to have no generic
-          // hints, but that discrepancy should be handled by the caller.
-          if !type_def.generics.parameters.is_empty() {
-            assert!(
-              current.generic_hints.is_empty(),
-              "there should be an expected discrepancy between the current stub type's generic hint count and the target type def.'s generic parameter count"
-            );
-
-            return Ok(Type::Stub(current));
-          }
-
-          type_def.body.to_owned()
-        }
+        symbol_table::RegistryItem::TypeDef(type_def) => type_def.body.to_owned(),
         _ => unreachable!("all possible stub type targets should have been covered"),
       };
 
@@ -334,7 +309,6 @@ pub struct ConcreteType(Type2<ConcreteType>);
 pub enum PreUnificationType {
   Type(Type2<PreUnificationType>),
   Variable(TypeVariable),
-  Generic(GenericType),
   Stub(StubType),
 }
 
@@ -358,31 +332,11 @@ pub enum Type {
   /// take the form of a monomorphic (ground) type once unification has
   /// been performed.
   Variable(TypeVariable),
-  /// A generic type that has not been instantiated nor constrained.
-  ///
-  /// This type can be instantiated given an environment that maps this generic
-  /// type to a concrete type.
-  Generic(GenericType),
   /// A meta type that represents the lack of a value.
   Unit,
 }
 
 impl Type {
-  pub(crate) fn contains_generic_types(
-    &self,
-    symbol_table: &symbol_table::SymbolTable,
-  ) -> Result<bool, TypeStripError> {
-    for inner_type_result in self.get_indirect_subtree_iter(symbol_table) {
-      let inner_type = inner_type_result?;
-
-      if inner_type.is_a_generic() {
-        return Ok(true);
-      }
-    }
-
-    Ok(false)
-  }
-
   /// Check that a given type does not contain nested recursion in its subtree.
   /// This checks for singular, or direct recursion, but will not identify mutual
   /// recursion, as more complicated considerations and possibly multiple contexts
@@ -439,13 +393,6 @@ impl Type {
     IndirectSubtreeIterator::new(self, symbol_table)
   }
 
-  pub fn is_same_generic_as(&self, other: &Type) -> bool {
-    match (self, other) {
-      (Type::Generic(a), Type::Generic(b)) => a.substitution_id == b.substitution_id,
-      _ => false,
-    }
-  }
-
   pub(crate) fn try_strip_all_monomorphic_stub_layers(
     self,
     symbol_table: &symbol_table::SymbolTable,
@@ -481,20 +428,8 @@ impl Type {
     matches!(self, Type::Unit)
   }
 
-  /// Determine whether the type is a generic type.
-  ///
-  /// Generic types are types that are polymorphic. In other words,
-  /// a type that is generic. This is also known as a type scheme.
-  /// This is the opposite of a monotype, and excludes type variables.
-  pub(crate) fn is_a_generic(&self) -> bool {
-    matches!(self, Type::Generic(..))
-  }
-
   pub fn is_a_meta(&self) -> bool {
-    matches!(
-      self,
-      Type::Generic(..) | Type::Stub(..) | Type::Variable(..)
-    )
+    matches!(self, Type::Stub(..) | Type::Variable(..))
   }
 
   /// A concrete type is any type that is not a meta type (ex. generic,

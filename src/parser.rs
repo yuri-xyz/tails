@@ -621,22 +621,15 @@ impl Parser {
     })
   }
 
-  /// %path (%generic_hints)?
+  /// %path
   fn parse_stub_type(&mut self) -> diagnostic::Maybe<types::StubType> {
     let path = self.parse_path(symbol_table::SymbolKind::Type)?;
-
-    let generic_hints = if self.is(&lexer::TokenKind::LessThan) {
-      self.parse_generic_hints()?
-    } else {
-      Vec::default()
-    };
 
     Ok(types::StubType {
       universe_id: self
         .id_generator
         .next_artifact_id(format!("stub_type.{}", path.base_name)),
       path,
-      generic_hints,
     })
   }
 
@@ -729,13 +722,6 @@ impl Parser {
     self.skip_one(&lexer::TokenKind::Func)?;
 
     let name = self.parse_name()?;
-
-    let generics = if self.is(&lexer::TokenKind::LessThan) {
-      self.parse_generics()?
-    } else {
-      ast::Generics::default()
-    };
-
     let signature = self.parse_signature(SignatureParserInvoker::Function)?;
 
     self.skip_one(&lexer::TokenKind::Colon)?;
@@ -747,7 +733,6 @@ impl Parser {
       signature: std::rc::Rc::new(signature),
       body,
       registry_id: self.id_generator.next_registry_id(),
-      generics,
       type_id: self.id_generator.next_type_id(),
     })
   }
@@ -871,12 +856,6 @@ impl Parser {
 
     let name = self.parse_name()?;
 
-    let generics = if self.is(&lexer::TokenKind::LessThan) {
-      self.parse_generics()?
-    } else {
-      ast::Generics::default()
-    };
-
     self.skip_one(&lexer::TokenKind::Equal)?;
 
     let body = self.parse_type()?;
@@ -885,7 +864,6 @@ impl Parser {
       registry_id: self.id_generator.next_registry_id(),
       name,
       body,
-      generics,
     })
   }
 
@@ -1420,16 +1398,8 @@ impl Parser {
     Ok(self.parse_binary_op_or_default(initial_expr, 0)?)
   }
 
-  /// %expr %generic_hints '(' (%expr (','))* ')'
+  /// %expr '(' (%expr (','))* ')'
   fn parse_call_site(&mut self, callee: ast::Expr) -> diagnostic::Maybe<ast::CallSite> {
-    let generic_hints = if self.is(&lexer::TokenKind::ColonDouble) {
-      self.skip()?;
-
-      self.parse_generic_hints()?
-    } else {
-      Vec::default()
-    };
-
     self.skip_one(&lexer::TokenKind::ParenthesesL)?;
 
     let mut arguments = Vec::new();
@@ -1457,7 +1427,6 @@ impl Parser {
       registry_id: self.id_generator.next_registry_id(),
       callee_expr: callee,
       arguments,
-      generic_hints,
     })
   }
 
@@ -1472,7 +1441,6 @@ impl Parser {
       callee_expr: callee,
       type_id: self.id_generator.next_type_id(),
       callee_type_id: self.id_generator.next_type_id(),
-      generic_hints: Vec::default(),
       arguments: vec![ast::CallSiteArg {
         type_id: self.id_generator.next_type_id(),
         value: argument,
@@ -1722,29 +1690,6 @@ impl Parser {
       package_name,
       module_name,
     })
-  }
-
-  /// '<' (%name ','))* '>'
-  fn parse_generics(&mut self) -> diagnostic::Maybe<ast::Generics> {
-    // TODO: This allows for an empty generics list. Add a warning on the semantic check pass, as it is not severe enough to warrant a parser error.
-
-    self.skip_one(&lexer::TokenKind::LessThan)?;
-
-    let mut parameters = Vec::new();
-
-    const TERMINATOR: lexer::TokenKind = lexer::TokenKind::GreaterThan;
-
-    while self.until_terminator(&TERMINATOR)? {
-      parameters.push(types::GenericType {
-        name: self.parse_name()?,
-        registry_id: self.id_generator.next_registry_id(),
-        substitution_id: self.id_generator.next_substitution_id(),
-      });
-
-      self.skip_comma(&TERMINATOR)?;
-    }
-
-    Ok(ast::Generics { parameters })
   }
 
   /// '<' (%type ',')* '>'

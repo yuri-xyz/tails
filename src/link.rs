@@ -144,28 +144,6 @@ impl<'a> visit::Visitor for LinkContext<'a> {
     if Self::does_item_has_scope(item) {
       self.scope_stack.push(symbol_table::Scope::new());
     }
-
-    let generics = match item {
-      ast::Item::Function(function) => Some(&function.generics),
-      ast::Item::TypeDef(type_def) => Some(&type_def.generics),
-      _ => None,
-    };
-
-    if let Some(generics) = generics {
-      for generic_parameter in &generics.parameters {
-        self.try_declare_local(
-          symbol_table::Symbol {
-            path: symbol_table::SymbolPath {
-              base_name: generic_parameter.name.to_owned(),
-              sub_name: None,
-              kind: symbol_table::SymbolKind::Type,
-            },
-          },
-          generic_parameter.registry_id,
-          false,
-        );
-      }
-    }
   }
 
   fn exit_item(&mut self, item: &ast::Item) {

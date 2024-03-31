@@ -1,11 +1,7 @@
 use crate::{
-  ast, auxiliary, inference, instantiation, lowering, resolution, symbol_table, types, unification,
-  visit::Visitor,
+  ast, auxiliary, inference, lowering, resolution, symbol_table, types, unification, visit::Visitor,
 };
-use inkwell::{
-  types::BasicType,
-  values::{AnyValue, BasicValue},
-};
+use inkwell::{types::BasicType, values::BasicValue};
 
 pub(crate) const BUG_LLVM_VALUE: &str = "should always yield an LLVM value";
 
@@ -78,16 +74,6 @@ pub struct LoweringContext<'a, 'llvm> {
   ///
   /// Used to place alloca instructions for optimization purposes.
   pub(crate) llvm_entry_block: Option<inkwell::basic_block::BasicBlock<'llvm>>,
-  /// A cache of monomorphized (specialized) polymorphic functions.
-  ///
-  /// This is used to avoid re-specializing the same function multiple times. In
-  /// other words, this is used for memoization (an optimization technique).
-  ///
-  /// When a call expression attempts to specialize a polymorphic function, if the
-  /// same monomorphism configuration is used (i.e. the same concrete type arguments
-  /// are being used to fill in the generic types) has been previously used, then such
-  /// result is to be re-used instead of re-specializing the function.
-  pub(crate) monomorphism_cache: MonomorphismCache<'llvm>,
   pub(crate) universe_stack: resolution::UniverseStack,
   /// A flag that indicates how to treat or perform access (load) on certain nodes.
   ///
@@ -165,80 +151,10 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
       access_mode: AccessMode::None,
       llvm_entry_block: None,
       resolution_helper,
-      monomorphism_cache: MonomorphismCache::new(),
       interned_string_literals: std::collections::HashMap::new(),
       runtime_guards_failure_buffers: std::collections::HashMap::new(),
       universe_stack: resolution::UniverseStack::new(),
     })
-  }
-
-  pub(crate) fn memoize_monomorphic_fn(
-    &mut self,
-    id: symbol_table::RegistryId,
-    call_argument_types: Vec<types::Type>,
-    llvm_function: inkwell::values::FunctionValue<'llvm>,
-  ) {
-    let value = MonomorphismCacheEntry(call_argument_types, llvm_function);
-
-    self
-      .monomorphism_cache
-      .entry(id)
-      // OPTIMIZE: Avoid cloning.
-      .and_modify(|entry| entry.push(value.clone()))
-      .or_insert(vec![value]);
-  }
-
-  pub(crate) fn find_memoized_monomorphism(
-    &self,
-    function_id: &symbol_table::RegistryId,
-    argument_types: &[types::Type],
-  ) -> Option<inkwell::values::FunctionValue<'llvm>> {
-    let monomorphisms = self.monomorphism_cache.get(function_id)?;
-
-    // OPTIMIZE: This operation is `O(n)`, where `n` represents the amount of monomorphisms for any given polymorphic function (could be a lot!).
-    for monomorphism_types in monomorphisms {
-      // BUG: (tag:object-unification-cache) It seems that unifying object types causes false positives, and thus monomorphisms are cached when they shouldn't be. Then, retrieved with differing object type argument/parameter sets when they shouldn't; which seems to be caused by misleading object type unification!
-      if self.unify_type_sets(&monomorphism_types.0, argument_types) {
-        return Some(monomorphism_types.1);
-      }
-    }
-
-    None
-  }
-
-  /// An utility function that uses unification to determine whether
-  /// two slices of types are equivalent.
-  fn unify_type_sets(&self, set_a: &[types::Type], set_b: &[types::Type]) -> bool {
-    // CONSIDER: Moving this functionality under the `types` module.
-    // TODO: Check that provided types are concrete (as they should be by this stage), as generic types cannot be unified (they would just be ignored, and may return a false positive result). If so, consider changing the return type of this function to be more explicit, by making it an enum, such as `UnificationResult::CannotUnifyGenericTypes` and `UnificationResult::Success`.
-
-    if set_a.len() != set_b.len() {
-      return false;
-    }
-
-    let universes = instantiation::TypeSchemes::new();
-
-    let mut unification_ctx = unification::TypeUnificationContext::new(
-      self.symbol_table,
-      symbol_table::SubstitutionEnv::new().to_owned(),
-      &universes,
-    );
-
-    let constraints = set_a
-      .iter()
-      .zip(set_b.iter())
-      .map(|(monomorphism_type, given_type)| {
-        inference::Constraint::Equality(monomorphism_type.to_owned(), given_type.to_owned())
-      })
-      .map(|constraint| (resolution::UniverseStack::new(), constraint))
-      .collect::<Vec<_>>();
-
-    // REVIEW: Passing-in an empty type environment is expected?
-    // If the unification process succeeded without any error diagnostics,
-    // then all the types were successfully unified.
-    unification_ctx
-      .solve_constraints(&symbol_table::TypeEnvironment::new(), &constraints)
-      .is_ok()
   }
 
   /// Inserts an LLVM alloca instruction in the entry basic block of the
@@ -506,7 +422,6 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
       types::Type::Stub(_) => unreachable!(
         "stub type layers should have been stripped when the type being matched was resolved"
       ),
-      types::Type::Generic(..) => unreachable!("generic types should have been fully resolved"),
       types::Type::Range(..) | types::Type::Variable { .. } => {
         unreachable!("meta types should not be present after the type unification phase")
       }
@@ -718,46 +633,6 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
     self.universe_stack = previous_universe_stack;
 
     llvm_value
-  }
-
-  pub(crate) fn try_lower_possibly_polymorphic_callee(
-    &mut self,
-    call_site_universe_id: &symbol_table::UniverseId,
-    callee_registry_id: &symbol_table::RegistryId,
-    callee: &std::rc::Rc<ast::Function>,
-    argument_types: &[types::Type],
-  ) -> Option<inkwell::values::FunctionValue<'llvm>> {
-    if let Some(llvm_cached_monomorphism) =
-      self.find_memoized_monomorphism(&callee.registry_id, &argument_types)
-    {
-      assert!(
-        callee.is_polymorphic(),
-        "all functions in the monomorphism cache should be polymorphic"
-      );
-
-      return Some(llvm_cached_monomorphism);
-    }
-
-    if callee.is_polymorphic() {
-      let llvm_monomorphic_function = self
-        .lower_artifact(
-          call_site_universe_id.to_owned(),
-          &ast::Item::Function(std::rc::Rc::clone(callee)),
-        )
-        .expect(BUG_LLVM_VALUE)
-        .as_any_value_enum()
-        .into_function_value();
-
-      self.memoize_monomorphic_fn(
-        callee_registry_id.to_owned(),
-        argument_types.to_owned(),
-        llvm_monomorphic_function,
-      );
-
-      Some(llvm_monomorphic_function)
-    } else {
-      None
-    }
   }
 
   /// Memoize a global string pointer literal.

@@ -1426,15 +1426,6 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
         .collect::<Vec<_>>()
     };
 
-    let llvm_monomorphic_function = callee_function.and_then(|callee| {
-      self.try_lower_possibly_polymorphic_callee(
-        &call_site.universe_id,
-        &callee.registry_id,
-        callee,
-        &argument_types,
-      )
-    });
-
     let callee_type = self
       .resolve_type_by_id(&call_site.callee_type_id)
       .into_owned();
@@ -1442,16 +1433,9 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
     // BUG: (tag:closure-captures) When building an indirect call to a closure that has captures (and thus a capture environment), its signature/function type is lowered without the environment parameter. This causes internal LLVM issues and produces misleading LLVM errors, even module verification! The callee type must be modified and the capture environment be taken into account.
     let callee_signature_type = assert_extract!(callee_type, types::Type::Signature);
 
-    let llvm_call = if let Some(llvm_monomorphic_function) = llvm_monomorphic_function {
-      self
-        .llvm_builder
-        .build_direct_call(llvm_monomorphic_function, llvm_arguments.as_slice(), "call")
-        .expect(BUG_BUILDER_UNSET)
-        .try_as_basic_value()
-        .left()
-    } else {
-      // NOTE: The callee will always be a pointer at this point, because
-      // it is not possible to have an LLVM function as an inline-value.
+    // NOTE: The callee will always be a pointer at this point, because
+    // it is not possible to have an LLVM function as an inline-value.
+    let llvm_call = {
       let llvm_callee_ptr = self
         .lower_with_access_mode(&call_site.callee_expr, lowering_ctx::AccessMode::None)
         .expect(lowering_ctx::BUG_LLVM_VALUE)
@@ -1508,15 +1492,9 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
 
     // REVIEW: If we do choose to lower declarations such as functions on-demand (i.e. a reference to a function yet to be lowered), buffers would interfere with the lowering of such function, so we would need to stash buffers and pop them when entering and exiting functions.
 
-    let is_polymorphic = function.is_polymorphic();
     let memoization_key = (lowering_ctx::AccessMode::None, function.registry_id);
 
     if let Some(llvm_cached_value) = self.llvm_value_memoization.get(&memoization_key) {
-      assert!(
-        !is_polymorphic,
-        "non-polymorphic memoization cache should not contain polymorphic functions"
-      );
-
       // NOTE: Functions are never accessed, thus access rules will never apply
       // to cached LLVM functions.
       return *llvm_cached_value;
@@ -1571,15 +1549,12 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
 
     self.llvm_function_buffer = Some(llvm_function);
 
-    // FIXME: The same procedure will need to be done to allow recursion, but for polymorphic functions!
-    // If the function is not polymorphic, cache its LLVM function value
-    // before visiting the body, to allow for recursive function calls.
-    if !is_polymorphic {
-      self.llvm_value_memoization.insert(
-        memoization_key,
-        Some(llvm_function.as_global_value().as_basic_value_enum()),
-      );
-    }
+    // Cache the LLVM function value before visiting the body,
+    // to allow for recursive function calls.
+    self.llvm_value_memoization.insert(
+      memoization_key,
+      Some(llvm_function.as_global_value().as_basic_value_enum()),
+    );
 
     // Assign names to the LLVM parameters. This is useful for debugging.
     for parameters in llvm_function

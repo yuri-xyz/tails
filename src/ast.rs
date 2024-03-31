@@ -74,12 +74,6 @@ pub struct With {
   pub deltas: Object,
 }
 
-#[derive(Debug, Default)]
-pub struct Generics {
-  pub parameters: Vec<types::GenericType>,
-  // TODO: Constraints.
-}
-
 /// A parentheses expression which encapsulates another expression.
 ///
 /// This is useful to enforce precedence in the AST, and to make
@@ -215,21 +209,6 @@ pub enum Item {
 }
 
 impl Item {
-  pub(crate) fn is_polymorphic(&self) -> bool {
-    self
-      .find_generics()
-      .map(|generics| !generics.parameters.is_empty())
-      .unwrap_or(false)
-  }
-
-  pub(crate) fn find_generics(&self) -> Option<&Generics> {
-    match self {
-      Item::Function(function) => Some(&function.generics),
-      Item::TypeDef(type_def) => Some(&type_def.generics),
-      _ => None,
-    }
-  }
-
   /// Attempt to find the declaration id of this node.
   ///
   /// Mainly reference-able nodes have declaration ids, and not all values
@@ -549,13 +528,6 @@ pub struct Function {
   pub name: String,
   pub signature: std::rc::Rc<Signature>,
   pub body: std::rc::Rc<Block>,
-  pub generics: Generics,
-}
-
-impl Function {
-  pub fn is_polymorphic(&self) -> bool {
-    !self.generics.parameters.is_empty()
-  }
 }
 
 #[derive(Debug)]
@@ -644,7 +616,6 @@ pub struct CallSite {
   pub callee_expr: Expr,
   pub callee_type_id: symbol_table::TypeId,
   pub arguments: Vec<CallSiteArg>,
-  pub generic_hints: Vec<types::Type>,
 }
 
 impl CallSite {
@@ -695,7 +666,6 @@ pub struct TypeDef {
   pub registry_id: symbol_table::RegistryId,
   pub name: String,
   pub body: types::Type,
-  pub generics: Generics,
 }
 
 #[derive(PartialEq, Debug)]

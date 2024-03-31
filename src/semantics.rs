@@ -177,13 +177,6 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
   fn visit_function(&mut self, function: &ast::Function) {
     self.current_function_id = Some(function.registry_id);
 
-    if function.is_polymorphic() {
-      assert!(
-        !self.universe_stack.is_empty(),
-        "polymorphic functions should not be visited with an empty universe stack (universe stack not updated when visiting a polymorphic item?)"
-      );
-    }
-
     if function.signature.is_variadic {
       self
         .diagnostics
@@ -284,32 +277,6 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
       self
         .diagnostics
         .push(diagnostic::Diagnostic::ConditionOrValueIsConstant);
-    }
-  }
-
-  fn visit_call_site(&mut self, call_site: &ast::CallSite) {
-    let callee = call_site.strip_callee(self.symbol_table).unwrap();
-
-    // REVIEW: Shouldn't this be handled implicitly by the type unification algorithm?
-    if let ast::Callable::Function(function) = callee {
-      if !function.is_polymorphic() && !call_site.generic_hints.is_empty() {
-        self
-          .diagnostics
-          .push(diagnostic::Diagnostic::FunctionTakesNoGenericParameters(
-            function.name.to_owned(),
-          ));
-      }
-      // Since only artifacts (call sites with generic hints) are collected
-      // and processed during instantiation, the instantiation phase will not
-      // report diagnostics for missing generic hints. Thus, it must be checked
-      // here.
-      else if function.is_polymorphic() && call_site.generic_hints.is_empty() {
-        self
-          .diagnostics
-          .push(diagnostic::Diagnostic::FunctionMissingGenericHints(
-            function.name.to_owned(),
-          ));
-      }
     }
   }
 

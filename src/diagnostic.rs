@@ -16,18 +16,12 @@ pub type Maybe<T = ()> = Result<T, Vec<Diagnostic>>;
 // REVISE: Expand certain variants into objects with field names if they have two or more fields. This is for code readability and clarity.
 #[derive(Debug, Clone)]
 pub enum Diagnostic {
-  FunctionMissingGenericHints(String),
   ReturnTypeHintRequired,
   ClosureCaptureAfterParameters,
   ParameterTypeHintRequired(String),
   NonAsciiCharactersNotSupported(char),
-  CalleeCannotAcceptGenericHints(String),
   RecursiveType(types::Type),
   IntersectionOfClosedObjectsIsIncomplete(usize, usize),
-  GenericParameterCountMismatch {
-    expected: usize,
-    actual: usize,
-  },
   OpaquePointerMustBeCasted,
   ConstructionOfInfiniteType,
   SignaturesDifferInParameterCount(usize, usize),
@@ -71,7 +65,6 @@ pub enum Diagnostic {
     at: symbol_table::RegistryId,
     starts_at: symbol_table::RegistryId,
   },
-  FunctionTakesNoGenericParameters(String),
   UnusedValueMustBeUsedOrDiscarded,
   TupleAccessOutOfBounds {
     index: usize,

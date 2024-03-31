@@ -7,10 +7,7 @@
 //! functions, and creates a generic substitution environment per instance invoker (ie.
 //! a call site to a polymorphic function) that can be retrieved by subsequent phases.
 
-use crate::{
-  assert_extract, diagnostic, inference, instantiation, resolution, substitution, symbol_table,
-  types,
-};
+use crate::{assert_extract, diagnostic, inference, resolution, substitution, symbol_table, types};
 
 pub struct TypeUnificationContext<'a> {
   pub(crate) symbol_table: &'a symbol_table::SymbolTable,
@@ -24,13 +21,12 @@ impl<'a> TypeUnificationContext<'a> {
   pub fn new(
     symbol_table: &'a symbol_table::SymbolTable,
     type_var_substitutions: symbol_table::SubstitutionEnv,
-    universes: &'a instantiation::TypeSchemes,
   ) -> Self {
     Self {
       symbol_table,
       substitutions: type_var_substitutions,
       object_substitutions: symbol_table::SubstitutionEnv::new(),
-      resolution_helper: resolution::BaseResolutionHelper::new(universes, symbol_table),
+      resolution_helper: resolution::BaseResolutionHelper::new(symbol_table),
     }
   }
 
@@ -134,11 +130,6 @@ impl<'a> TypeUnificationContext<'a> {
 
     // Solve all equality constraints.
     for (universe_stack, constraint) in constraints.clone() {
-      assert!(
-        universe_stack.len() <= self.resolution_helper.get_universes().len(),
-        "there should not be more universes in the universe stack than there are in the type schemes, otherwise it would mean that the type schemes are not exhaustive, and that a universe is missing (more artifacts than universes?)"
-      );
-
       diagnostics_helper.extend(self.dispatch_constraint(&universe_stack, constraint))?;
     }
 
@@ -198,16 +189,6 @@ impl<'a> TypeUnificationContext<'a> {
     diagnostics_helper.try_return_value(solutions)
   }
 
-  fn unify_tuple_element_of(
-    &mut self,
-    tuple_type: &types::Type,
-    element_type: &types::Type,
-    index: u32,
-  ) -> diagnostic::Maybe {
-    // TODO: Implement. Might need to occur after equality constraints, so that it doesn't have to deal with type variables, generics, and stub types?
-    todo!();
-  }
-
   fn dispatch_constraint(
     &mut self,
     universe_stack: &resolution::UniverseStack,
@@ -216,11 +197,6 @@ impl<'a> TypeUnificationContext<'a> {
     match &constraint {
       // Equality between two types.
       inference::Constraint::Equality(type_a, type_b) => self.unify(type_a, type_b, universe_stack),
-      inference::Constraint::TupleElementOf {
-        tuple_type,
-        element_type,
-        index,
-      } => self.unify_tuple_element_of(tuple_type, element_type, *index),
     }
   }
 }
@@ -265,9 +241,6 @@ impl TypeUnificationContext<'_> {
       (types::Type::Unit, types::Type::Unit) => Ok(()),
       (types::Type::Stub(stub), other) | (other, types::Type::Stub(stub)) => {
         self.unify_stub(stub, other, universe_stack)
-      }
-      (types::Type::Generic(generic), other) | (other, types::Type::Generic(generic)) => {
-        self.unify_generic(generic, other, universe_stack)
       }
       (types::Type::Tuple(tuple_a), types::Type::Tuple(tuple_b)) => {
         self.unify_tuples(tuple_a, tuple_b, universe_stack)
@@ -637,37 +610,6 @@ impl TypeUnificationContext<'_> {
     Ok(())
   }
 
-  pub(crate) fn unify_generic(
-    &mut self,
-    generic_type: &types::GenericType,
-    other_type: &types::Type,
-    universe_stack: &resolution::UniverseStack,
-  ) -> diagnostic::Maybe {
-    // NOTE: It makes no difference if both types are generic types,
-    // even if they are from different groups/contexts. There are valid
-    // cases where generic types from different contexts are unified against
-    // each other, such as when a generic type is passed as a generic hint to
-    // polymorphic functions.
-
-    assert!(
-      !universe_stack.is_empty(),
-      "universe stack should not be empty when unifying and resolving a generic type"
-    );
-
-    let resolution = self
-      .resolution_helper
-      .resolve_generic(&generic_type.substitution_id, universe_stack.clone())
-      .unwrap()
-      .into_owned();
-
-    assert!(
-      resolution.is_immediate_subtree_concrete(),
-      "resolution of generic type should be concrete"
-    );
-
-    self.unify(&resolution, other_type, universe_stack)
-  }
-
   pub(crate) fn check_open_closed_objects(
     &mut self,
     open_object: &types::ObjectType,
@@ -708,13 +650,9 @@ mod tests {
     let first_index_id = id_generator.next_substitution_id();
     let second_index_id = id_generator.next_substitution_id();
     let symbol_table = symbol_table::SymbolTable::default();
-    let universes = instantiation::TypeSchemes::new();
 
-    let mut type_unification_context = TypeUnificationContext::new(
-      &symbol_table,
-      symbol_table::SubstitutionEnv::new(),
-      &universes,
-    );
+    let mut type_unification_context =
+      TypeUnificationContext::new(&symbol_table, symbol_table::SubstitutionEnv::new());
 
     type_unification_context.substitutions.insert(
       first_index_id.clone(),
@@ -752,13 +690,9 @@ mod tests {
   #[test]
   fn solve_constraints() {
     let symbol_table = symbol_table::SymbolTable::default();
-    let universes = instantiation::TypeSchemes::new();
 
-    let mut unification_ctx = TypeUnificationContext::new(
-      &symbol_table,
-      symbol_table::SubstitutionEnv::new(),
-      &universes,
-    );
+    let mut unification_ctx =
+      TypeUnificationContext::new(&symbol_table, symbol_table::SubstitutionEnv::new());
 
     // TODO: Add actual constraints to complete this test.
 

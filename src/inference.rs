@@ -101,9 +101,6 @@ impl<'a> InferenceContext<'a> {
   /// Create a signature type from the given signature and return type.
   ///
   /// The return type id is registered in the type cache.
-  ///
-  /// This is a convenience method for creating a function types, that will take
-  /// into account generics and type hints. Logic for instance parameters is not considered.
   pub(crate) fn create_signature_type(
     &mut self,
     signature: &ast::Signature,
@@ -336,14 +333,6 @@ impl<'a> InferenceContext<'a> {
 pub enum Constraint {
   /// Represents equality between two types.
   Equality(types::Type, types::Type),
-  // CONSIDER: Another, perhaps more complex method would be to have tuples be similar to objects, but as a hash map. This way, it would have index -> element type mapping. It would need an open/closed system, similar to objects. Then, the 'element type of' can be modeled as an open tuple type, with key=index, and value=element type. This method of constraints might be more intuitive and simpler to manage, however.
-  // CONSIDER: If this method works properly, replacing current object unification system with 'object element of' constraint.
-  // REVIEW: If this occurs POST unification, then won't it unify against other things? In other words, it could only be a 'verification' constraint, since it won't aid unification?
-  TupleElementOf {
-    tuple_type: types::Type,
-    element_type: types::Type,
-    index: u32,
-  },
 }
 
 pub(crate) trait Infer<'a> {
@@ -589,11 +578,11 @@ impl Infer<'_> for ast::TupleIndex {
     let element_type = context.create_type_variable("tuple.access.element");
 
     // BUG: (test:tuple_indexing_simple) This should be panicking with a `not yet implemented` message, since the unification's handling of `TupleElementOf` constraints is not yet implemented, but it's not panicking. Instead, unsolved type variable diagnostics are produced.
-    context.add_other_constraint(Constraint::TupleElementOf {
-      tuple_type: tuple_type.clone(),
-      element_type: element_type.clone(),
-      index: self.index,
-    });
+    // context.add_other_constraint(Constraint::TupleElementOf {
+    //   tuple_type: tuple_type.clone(),
+    //   element_type: element_type.clone(),
+    //   index: self.index,
+    // });
 
     context
       .type_env
@@ -931,15 +920,7 @@ impl Infer<'_> for ast::CallSite {
 
     // TODO: Handle variadic functions more explicitly and carefully here.
 
-    // Only account universe stack if the call site is to a polymorphic callee,
-    // otherwise it is not considered an artifact.
-    let universe_id_opt = if !self.generic_hints.is_empty() {
-      Some(self.universe_id.clone())
-    } else {
-      None
-    };
-
-    let mut context = parent.inherit(universe_id_opt);
+    let mut context = parent.inherit(None);
 
     // BUG: The assumption that the callee is a callable will not always hold true by this point; unification hasn't yet occurred! This will panic if the callee is indeed not a callable, instead of being more graceful with a diagnostic.
     let callee = self.strip_callee(context.symbol_table).unwrap();

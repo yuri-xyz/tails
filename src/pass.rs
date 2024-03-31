@@ -1,9 +1,9 @@
 //! Contains utilities for the orchestration and execution of passes.
 
 use crate::{
-  ast, auxiliary, declare, diagnostic, inference, instantiation, lifetime, link, lowering_ctx,
-  resolution, semantics, symbol_table, unification,
-  visit::{self, Visitable, Visitor},
+  ast, auxiliary, declare, diagnostic, inference, lifetime, link, lowering_ctx, resolution,
+  semantics, symbol_table, unification,
+  visit::{Visitable, Visitor},
 };
 
 macro_rules! require_dependency {
@@ -96,20 +96,14 @@ impl Pass for SemanticCheckPass {
   ) -> PassResult {
     let symbol_table = require_dependency!(&context.symbol_table);
     let type_env = require_dependency!(&context.type_env);
-    let universes = require_dependency!(&context.universes);
-    let resolution_helper = resolution::ResolutionHelper::new(universes, symbol_table, type_env);
-    let reverse_universe_tracker = require_dependency!(&context.reverse_universe_tracker);
+    let resolution_helper = resolution::ResolutionHelper::new(symbol_table, type_env);
 
     let mut semantic_check_ctx =
       semantics::SemanticCheckContext::new(&symbol_table, &resolution_helper);
 
     // REVISE: Use the provided module instead. This will also get rid of the dependence on the module map from the context's fields.
     for global_item in &module.global_items {
-      visit::traverse_possibly_polymorphic_global_item(
-        global_item,
-        reverse_universe_tracker,
-        &mut semantic_check_ctx,
-      );
+      global_item.traverse(&mut semantic_check_ctx);
     }
 
     diagnostic::DiagnosticsHelper::from(semantic_check_ctx.into_diagnostics()).into_pass_result()
@@ -133,8 +127,7 @@ impl Pass for LoweringPass {
   ) -> PassResult {
     let symbol_table = require_dependency!(&context.symbol_table);
     let type_env = require_dependency!(&context.type_env);
-    let universes = require_dependency!(&context.universes);
-    let resolution_helper = resolution::ResolutionHelper::new(universes, symbol_table, type_env);
+    let resolution_helper = resolution::ResolutionHelper::new(symbol_table, type_env);
     let llvm_context = inkwell::context::Context::create();
     let llvm_module = llvm_context.create_module(&module.qualifier.to_string());
 
@@ -202,9 +195,7 @@ impl Pass for LifetimeAnalysisPass {
   ) -> PassResult {
     let symbol_table = require_dependency!(&context.symbol_table);
     let type_env = require_dependency!(&context.type_env);
-    let reverse_universe_tracker = require_dependency!(&context.reverse_universe_tracker);
-    let universes = require_dependency!(&context.universes);
-    let resolution_helper = resolution::ResolutionHelper::new(universes, symbol_table, type_env);
+    let resolution_helper = resolution::ResolutionHelper::new(symbol_table, type_env);
 
     let mut lifetime_analysis_ctx =
       lifetime::LifetimeAnalysisContext::new(symbol_table, &resolution_helper);
@@ -212,11 +203,7 @@ impl Pass for LifetimeAnalysisPass {
     lifetime_analysis_ctx.visit_module(module);
 
     for global_item in &module.global_items {
-      visit::traverse_possibly_polymorphic_global_item(
-        global_item,
-        reverse_universe_tracker,
-        &mut lifetime_analysis_ctx,
-      );
+      global_item.traverse(&mut lifetime_analysis_ctx);
     }
 
     diagnostic::DiagnosticsHelper::from(lifetime_analysis_ctx.diagnostics).into_pass_result()
@@ -363,73 +350,6 @@ impl Pass for LinkPass {
 #[derive(Default)]
 pub struct TypeInferencePass;
 
-impl TypeInferencePass {
-  fn create_reverse_universe_tracker(
-    symbol_table: &symbol_table::SymbolTable,
-  ) -> instantiation::ReverseUniverseTracker {
-    let mut reverse_universe_tracker = instantiation::ReverseUniverseTracker::new();
-
-    for (artifact_id, artifact) in &symbol_table.artifacts {
-      // REVISE: Simplify nesting and usage of if/else if possible. Or, simply abstract to their own functions.
-      let registry_id = if let instantiation::Artifact::CallSite(call_site) = artifact {
-        // BUG: This needs to be done after type checking and semantic analysis, otherwise stripping callee may fail due to the fact that the assumptions don't hold true before type checking and possibly semantic analysis. There's another problem, however: If this is done after type checking, since type checking phase and instantiation phase is not yet equipped to handle recursive calls, it would go into a stack overflow for recursive calls. Need to figure out how to properly position+handle the creation of the call graph.
-        let callee = call_site.strip_callee(symbol_table).unwrap();
-
-        let is_polymorphic = if let ast::Callable::Function(function) = &callee {
-          function.is_polymorphic()
-        } else {
-          continue;
-        };
-
-        if !is_polymorphic {
-          continue;
-        }
-
-        callee.get_registry_id()
-      } else if let instantiation::Artifact::StubType(stub_type) = &artifact {
-        let target = symbol_table
-          .follow_link(&stub_type.path.link_id)
-          .expect(auxiliary::BUG_NAME_RESOLUTION);
-
-        let target_item = target.into_item();
-
-        if let Some(target_item) = target_item {
-          // Ignore non-polymorphic targets.
-          if !target_item.is_polymorphic() {
-            continue;
-          }
-
-          target_item
-            .find_registry_id()
-            .expect("polymorphic target items should have a declaration id property")
-            .to_owned()
-        } else {
-          continue;
-        }
-      }
-      // TODO: In the future, other possibly polymorphic targets should also be handled here (ex. unions).
-      else {
-        continue;
-      };
-
-      // BUG: (test:generics_call_chain) The problem seems to be the following:
-      // 1. Reverse universe tracker processes all artifacts.
-      // 2. It processes polymorphic/artifact call sites.
-      // 3. It adds that call site's artifact id onto the reverse universe tracker.
-      // 4. Polymorphic item traversal occurs with the reverse universe tracker (`visit::traverse_possibly_polymorphic_item`).
-      // 5. The call site's artifact id is pushed onto the pass' universe stack via the `ArtifactContextSwitch` trait.
-      // 6. Fault: The problem is that simply adding that call site's artifact id might not be enough: For example, if a function is called from two layers deep in terms of generics, the universe stack also needs the artifact ids of the layered calls, otherwise it would only add say X layer's artifact id, which itself has a generic type as part of its generic hints, thus leaving such generic type unable to be resolved because ITS call site's artifact id is not present!
-
-      reverse_universe_tracker
-        .entry(registry_id)
-        .and_modify(|context_artifact_ids| context_artifact_ids.push(artifact_id.to_owned()))
-        .or_insert(vec![artifact_id.to_owned()]);
-    }
-
-    reverse_universe_tracker
-  }
-}
-
 impl Pass for TypeInferencePass {
   fn get_info(&self) -> PassInfo {
     PassInfo {
@@ -449,51 +369,23 @@ impl Pass for TypeInferencePass {
       inference::InferenceContext::new(symbol_table, None, context.id_count);
 
     for global_item in &module.global_items {
-      let is_polymorphic = global_item
-        .find_generics()
-        .map(|generics| !generics.parameters.is_empty())
-        .unwrap_or(false);
-
-      // Do not infer types for polymorphic items which aren't
-      // invoked by artifacts.
-      if !is_polymorphic {
-        inference_context.visit(global_item);
-      }
+      inference_context.visit(global_item);
     }
-
-    let instantiation_helper = instantiation::InstantiationHelper::new(symbol_table);
-    let (universes, instantiation_diagnostics) = instantiation_helper.instantiate_all_artifacts();
-    let diagnostics_helper = diagnostic::DiagnosticsHelper::from(instantiation_diagnostics);
-
-    if diagnostics_helper.contains_errors() {
-      return diagnostics_helper.into_pass_result();
-    }
-
-    assert!(
-      universes.len() == symbol_table.artifacts.len(),
-      "each artifact should have a corresponding universe"
-    );
 
     let inference_results = inference_context.into_overall_result();
 
     let mut type_unification_context = unification::TypeUnificationContext::new(
       symbol_table,
       inference_results.type_var_substitutions,
-      &universes,
     );
 
     let type_env = require_maybe_many!(type_unification_context
       .solve_constraints(&inference_results.type_env, &inference_results.constraints));
 
-    let reverse_universe_tracker = Self::create_reverse_universe_tracker(&symbol_table);
-
-    assert!(!diagnostics_helper.contains_errors());
     context.type_env = Some(type_env);
     context.id_count = inference_results.next_id_count;
-    context.universes = Some(universes);
-    context.reverse_universe_tracker = Some(reverse_universe_tracker);
 
-    PassResult::Ok(diagnostics_helper.diagnostics)
+    PassResult::Ok(Vec::new())
   }
 }
 
@@ -501,8 +393,6 @@ pub struct ExecutionContext<'a> {
   symbol_table: Option<symbol_table::SymbolTable>,
   call_graph: Option<auxiliary::CallGraph>,
   type_env: Option<symbol_table::TypeEnvironment>,
-  universes: Option<instantiation::TypeSchemes>,
-  reverse_universe_tracker: Option<instantiation::ReverseUniverseTracker>,
   id_count: usize,
   // FIXME: Should be removed and prefer only using a single module.
   main_package: &'a ast::Package,
@@ -614,8 +504,6 @@ impl<'a> PassManager<'a> {
       symbol_table: None,
       call_graph: None,
       type_env: None,
-      universes: None,
-      reverse_universe_tracker: None,
       id_count: initial_id_count,
       main_package: self.main_package,
       declarations: declare::DeclarationMap::new(),

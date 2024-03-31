@@ -135,17 +135,6 @@ impl<'a> visit::Visitor for DeclarationContext {
           .expect(auxiliary::BUG_REGISTRY_ITEM_MUST_BE_ITEM),
       );
     }
-
-    if let ast::Expr::CallSite(call_site) = expr {
-      // Only register call sites that have generic hints, and are thus
-      // considered polymorphic.
-      if !call_site.generic_hints.is_empty() {
-        self.symbol_table.artifacts.insert(
-          call_site.universe_id.to_owned(),
-          instantiation::Artifact::CallSite(std::rc::Rc::clone(call_site)),
-        );
-      }
-    }
   }
 
   fn visit_call_site(&mut self, call_site: &ast::CallSite) {
@@ -210,43 +199,6 @@ impl<'a> visit::Visitor for DeclarationContext {
         },
         variant.1.registry_id,
       );
-    }
-  }
-
-  fn visit_type(&mut self, ty: &crate::types::Type) {
-    if let types::Type::Stub(stub_type) = ty {
-      // BUG: What about stub types that are 'synthesized' after instantiation? ie. types that are instantiated may be artifacts themselves, but they're never registered as such, nor instantiated? If that doesn't apply, add a note explaining why. Same for the call site artifact case above.
-      // Only register stub types that have generic hints, and are thus
-      // considered polymorphic.
-      // FIXME: What if these stubs types when stripped yield polymorphic stub types? The previous logic included stripping logic for type stubs.
-      if !stub_type.generic_hints.is_empty() {
-        self.symbol_table.artifacts.insert(
-          stub_type.universe_id.to_owned(),
-          instantiation::Artifact::StubType(stub_type.to_owned()),
-        );
-      }
-    }
-    // Register any generic types that are part of functions in the symbol
-    // table for later use. This will allow for the instantiation phase to have
-    // a direct, linear registry of all generic types within functions, thus
-    // avoiding having to traverse the AST to find them.
-    else if let types::Type::Generic(generic_type) = ty {
-      self.symbol_table.registry.insert(
-        generic_type.registry_id,
-        symbol_table::RegistryItem::GenericType(generic_type.to_owned()),
-      );
-
-      // NOTE: Function id buffer might not always be set when visiting
-      // generic types. For example, the generic type could be associated
-      // to a type definition instead of being present inside a function.
-      if let Some(current_function_id) = self.current_function_id {
-        self
-          .symbol_table
-          .nested_generics
-          .entry(current_function_id)
-          .and_modify(|generics| generics.push(generic_type.to_owned()))
-          .or_insert_with(|| vec![generic_type.to_owned()]);
-      }
     }
   }
 }

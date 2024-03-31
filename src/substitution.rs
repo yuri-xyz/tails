@@ -46,54 +46,6 @@ impl<'a> UnificationSubstitutionHelper<'a> {
     }))
   }
 
-  fn substitute_generic_type(
-    &self,
-    ty: &types::Type,
-    generic_type: &types::GenericType,
-  ) -> Result<types::Type, SubstitutionError> {
-    // FIXME: This should FAIL when the generic cannot be substituted in certain scenarios. For example, during normal unification, generics should be ignored. But during instantiation, they should fail if they can't be substituted, yet the same logic (ignoring them) is used in both cases!
-
-    let is_recursive = self
-      .substitution_env
-      .get(&generic_type.substitution_id)
-      // NOTE: The type doesn't need to be compared by id or substitution id, since
-      // they're both unique per-type, thus it would always be false, which would lead
-      // to a stack overflow. Instead, by the point of instantiation it is assumed that
-      // both types have been unified, and thus any errors would have been reported.
-      .map_or(false, |target| {
-        let stripped_target = target
-          .to_owned()
-          .try_strip_all_monomorphic_stub_layers(self.symbol_table)
-          .unwrap();
-
-        if let types::Type::Generic(generic_target) = stripped_target {
-          generic_target.substitution_id == generic_type.substitution_id
-        } else {
-          false
-        }
-      });
-
-    // REVISE: Cleanup.
-    // If it points to itself, ignore it.
-    if is_recursive {
-      // CONSIDER: Reporting this as a problem. This function should return `Result`? Although in standard unification, it is okay for generics to point to themselves (redundant constraint)? Find/come up with a scenario where that would apply, and if it's not possible, this MUST return `Err`.
-      todo!()
-      // return ty.to_owned();
-    }
-    // Otherwise, if there's an actual substitution that isn't itself, continue the
-    // substitution recursive chain with that substitution instead.
-    else if let Some(substitution) = self.substitution_env.get(&generic_type.substitution_id) {
-      // TODO: Perform an `!occurs_in` assertion, to prevent stack overflow bugs? Or is it already performed above?
-
-      self.substitute(substitution)
-    }
-    // Lastly, the generic has no substitution on the provided substitution environment.
-    // Return the same type, and let the caller handle it.
-    else {
-      Ok(ty.to_owned())
-    }
-  }
-
   fn substitute_object_type(
     &self,
     object_type: &types::ObjectType,
@@ -161,7 +113,6 @@ impl<'a> UnificationSubstitutionHelper<'a> {
 
     match &stripped_type {
       types::Type::Pointer(pointee) => Ok(self.substitute(pointee.as_ref())?.into_pointer_type()),
-      types::Type::Generic(generic) => self.substitute_generic_type(&stripped_type, generic),
       types::Type::Object(object_type) => self.substitute_object_type(object_type),
       types::Type::Reference(ty) => Ok(types::Type::Reference(Box::new(
         self.substitute(ty.as_ref())?,
@@ -177,20 +128,7 @@ impl<'a> UnificationSubstitutionHelper<'a> {
       }
       // In the case that a stub type is encountered after stripping,
       // it must be a polymorphic stub type, which this function cannot handle.
-      types::Type::Stub(stub_type) => {
-        assert!(
-          !stub_type.generic_hints.is_empty(),
-          "all monomorphic stub type layers should have been stripped"
-        );
-
-        // Signal to the caller that a polymorphic stub type was encountered
-        // by returning a partial substitution result.
-        if !stub_type.generic_hints.is_empty() {
-          return Ok(stripped_type);
-        }
-
-        Ok(types::Type::Stub(stub_type.to_owned()))
-      }
+      types::Type::Stub(stub_type) => todo!(),
       types::Type::Variable(types::TypeVariable {
         substitution_id, ..
       }) if self

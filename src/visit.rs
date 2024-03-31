@@ -1,4 +1,4 @@
-use crate::{ast, instantiation, resolution, symbol_table, types};
+use crate::{ast, resolution, symbol_table, types};
 
 macro_rules! define_visit_fn {
   ($method_name:ident, $type_name:ty) => {
@@ -14,48 +14,6 @@ pub(crate) trait ArtifactVisitor {
   fn set_universe_stack(&mut self, universe_stack: resolution::UniverseStack);
 
   fn push_universe_id(&mut self, universe_id: symbol_table::UniverseId);
-}
-
-pub(crate) fn traverse_possibly_polymorphic_global_item(
-  global_item: &ast::Item,
-  reverse_context_artifact_id_tracker: &instantiation::ReverseUniverseTracker,
-  context: &mut (impl ArtifactVisitor + Visitor),
-) {
-  // In case that the item is polymorphic, but has no corresponding
-  // context artifact ids, do not traverse it with an empty universe stack.
-  if !global_item.is_polymorphic() {
-    global_item.traverse(context);
-
-    return;
-  }
-
-  let registry_id = global_item
-    .find_registry_id()
-    .expect("polymorphic items should always have corresponding declaration ids");
-
-  // It is valid and acceptable for polymorphic items to have no instantiations,
-  // and thus no corresponding context artifact ids registered. For example, a
-  // polymorphic function might not necessarily be called anywhere.
-  if let Some(artifact_ids) = reverse_context_artifact_id_tracker.get(registry_id) {
-    // BUG: Awaiting fix of logic bug that causes certain polymorphic items to be visited with incomplete universe stacks. For example, in a generic call chain, since call site artifacts are added to the reverse universe tracker without knowledge of THEIR previous call sites (call chain), if they pass generic hints that are generic types, those generic types cannot be resolved. This requires a slightly different perspective in terms of the implementation of traversing polymorphic items with their artifacts: the regular stack-based, push-pop artifact approach, instead of the current 'collect all artifacts and for each, visit', the difference being that one considers context (stack-based) and the other does not.
-    // traverse_polymorphic_item(global_item, artifact_ids, context);
-  }
-}
-
-pub(crate) fn traverse_polymorphic_item(
-  item: &ast::Item,
-  with_universe_stack: &[symbol_table::UniverseId],
-  artifact_visitor: &mut (impl ArtifactVisitor + Visitor),
-) {
-  // REVIEW: Is there a need to get the current universe stack, since won't it be visiting global items, so the universe stack SHOULD always be empty?
-  let previous_universe_stack = artifact_visitor.get_universe_stack().to_owned();
-
-  for artifact_id in with_universe_stack {
-    artifact_visitor.push_universe_id(artifact_id.to_owned());
-    item.traverse(artifact_visitor);
-  }
-
-  artifact_visitor.set_universe_stack(previous_universe_stack);
 }
 
 pub trait Visitor<T = ()> {
@@ -524,10 +482,6 @@ impl Visitable for ast::CallSite {
     for argument in &self.arguments {
       argument.value.traverse(visitor);
     }
-
-    for hint in &self.generic_hints {
-      hint.traverse(visitor);
-    }
   }
 }
 
@@ -574,7 +528,6 @@ impl Visitable for ast::TypeDef {
   }
 
   fn traverse_children<T>(&self, visitor: &mut dyn Visitor<T>) {
-    self.generics.traverse(visitor);
     self.body.traverse(visitor)
   }
 }
@@ -732,7 +685,6 @@ impl Visitable for ast::Function {
   }
 
   fn traverse_children<T>(&self, visitor: &mut dyn Visitor<T>) {
-    self.generics.traverse(visitor);
     self.signature.traverse(visitor);
     self.body.traverse(visitor);
   }
@@ -754,10 +706,6 @@ impl Visitable for types::Type {
       }
       types::Type::Stub(stub_type) => {
         stub_type.path.traverse(visitor);
-
-        for generic_hint in &stub_type.generic_hints {
-          generic_hint.traverse(visitor);
-        }
       }
       types::Type::Tuple(tuple_type) => {
         for element_type in &tuple_type.0 {
@@ -776,19 +724,6 @@ impl Visitable for types::Type {
         pointee_type.traverse(visitor);
       }
       _ => {}
-    }
-  }
-}
-
-impl Visitable for ast::Generics {
-  fn accept<T>(&self, visitor: &mut dyn Visitor<T>) -> T {
-    visitor.default_value()
-  }
-
-  fn traverse_children<T>(&self, visitor: &mut dyn Visitor<T>) {
-    for generic_type in &self.parameters {
-      // OPTIMIZE: Cloning.
-      types::Type::Generic(generic_type.to_owned()).traverse(visitor);
     }
   }
 }
