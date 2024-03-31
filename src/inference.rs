@@ -9,13 +9,6 @@ pub(crate) struct InferenceResult {
   pub type_var_substitutions: symbol_table::SubstitutionEnv,
   pub type_env: symbol_table::TypeEnvironment,
   pub ty: types::Type,
-  /// If the finalized type may be a generic type and thus requires an associated universe,
-  /// this field will be set to act as a carry-over for that associated universe id.
-  ///
-  /// For example, when inferring a call site to a polymorphic function, the call site's type
-  /// will be attached to the callee's return value. If that callee's return value's type is a
-  /// generic type, then the callee's universe is needed.
-  // pub leftover_universe_id: Option<symbol_table::UniverseId>,
   pub id_count: usize,
 }
 
