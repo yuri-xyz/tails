@@ -1,11 +1,12 @@
-func unbox<T>(x: T) -> unit:
-  pass
+foreign:
+  func emit(...) -> unit
 
 func tests() -> unit:
   let a = 1
   let b = 2
 
-  unbox::<{a: int}>({a})
-  unbox::<{a: {a: int}}>({a: {a}})
-  unbox::<{a: {a: {a: int}}}>({a: {a: {a}}})
-  unbox::<{a: {a: {b: int}}}>({a: {a: {b}}})
+  unsafe:
+    emit({a})
+    emit({a: {a}})
+    emit({a: {a: {a}}})
+    emit({a: {a: {b}}})

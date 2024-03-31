@@ -1,7 +1,7 @@
-const A: int = 123
+foreign:
+  func emit(...) -> unit
 
-func a<T>(x: T) -> unit:
-  pass
+const A: int = 123
 
 func tests() -> unit:
   const B: bool = true
@@ -11,10 +11,11 @@ func tests() -> unit:
   const F: int = E + D
   const G: int = F + A + E
 
-  a::<int>(A)
-  a::<bool>(B)
-  a::<bool>(C)
-  a::<int>(D)
-  a::<int>(E)
-  a::<int>(F)
-  a::<int>(G)
+  unsafe:
+    emit(A)
+    emit(B)
+    emit(C)
+    emit(D)
+    emit(E)
+    emit(F)
+    emit(G)

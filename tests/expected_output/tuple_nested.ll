@@ -27,7 +27,7 @@ fn.entry:
   %tuple.init.gep2 = getelementptr inbounds { { i32 } }, ptr %tuple.alloca, i32 0, i32 0
   store { i32 } %access.tuple.access, ptr %tuple.init.gep2, align 4
   %access.tuple.access3 = load { { i32 } }, ptr %tuple.alloca, align 4
-  call void @tests_tuple_nested.a({ { i32 } } %access.tuple.access3)
+  call void ({ { i32 } }, ...) @emit({ { i32 } } %access.tuple.access3)
   %tuple.init.gep6 = getelementptr inbounds { ptr }, ptr %tuple.alloca5, i32 0, i32 0
   store ptr null, ptr %tuple.init.gep6, align 8
   %access.tuple.access7 = load { ptr }, ptr %tuple.alloca5, align 8
@@ -39,7 +39,7 @@ fn.entry:
   %tuple.init.gep12 = getelementptr inbounds { { ptr }, { ptr } }, ptr %tuple.alloca4, i32 0, i32 1
   store { ptr } %access.tuple.access10, ptr %tuple.init.gep12, align 8
   %access.tuple.access13 = load { { ptr }, { ptr } }, ptr %tuple.alloca4, align 8
-  call void @tests_tuple_nested.a.1({ { ptr }, { ptr } } %access.tuple.access13)
+  call void ({ { ptr }, { ptr } }, ...) @emit({ { ptr }, { ptr } } %access.tuple.access13)
   %tuple.init.gep16 = getelementptr inbounds { i32 }, ptr %tuple.alloca15, i32 0, i32 0
   store i32 123, ptr %tuple.init.gep16, align 4
   %access.tuple.access17 = load { i32 }, ptr %tuple.alloca15, align 4
@@ -51,7 +51,7 @@ fn.entry:
   %tuple.init.gep22 = getelementptr inbounds { { i32 }, { ptr } }, ptr %tuple.alloca14, i32 0, i32 1
   store { ptr } %access.tuple.access20, ptr %tuple.init.gep22, align 8
   %access.tuple.access23 = load { { i32 }, { ptr } }, ptr %tuple.alloca14, align 8
-  call void @tests_tuple_nested.a.2({ { i32 }, { ptr } } %access.tuple.access23)
+  call void ({ { i32 }, { ptr } }, ...) @emit({ { i32 }, { ptr } } %access.tuple.access23)
   %tuple.init.gep26 = getelementptr inbounds { i32 }, ptr %tuple.alloca25, i32 0, i32 0
   store i32 1, ptr %tuple.init.gep26, align 4
   %access.tuple.access27 = load { i32 }, ptr %tuple.alloca25, align 4
@@ -68,7 +68,7 @@ fn.entry:
   %tuple.init.gep36 = getelementptr inbounds { { i32 }, { i32 }, { i32 } }, ptr %tuple.alloca24, i32 0, i32 2
   store { i32 } %access.tuple.access33, ptr %tuple.init.gep36, align 4
   %access.tuple.access37 = load { { i32 }, { i32 }, { i32 } }, ptr %tuple.alloca24, align 4
-  call void @tests_tuple_nested.a.3({ { i32 }, { i32 }, { i32 } } %access.tuple.access37)
+  call void ({ { i32 }, { i32 }, { i32 } }, ...) @emit({ { i32 }, { i32 }, { i32 } } %access.tuple.access37)
   %tuple.init.gep40 = getelementptr inbounds { i32 }, ptr %tuple.alloca39, i32 0, i32 0
   store i32 1, ptr %tuple.init.gep40, align 4
   %access.tuple.access41 = load { i32 }, ptr %tuple.alloca39, align 4
@@ -91,31 +91,8 @@ fn.entry:
   %tuple.init.gep53 = getelementptr inbounds { { i32 }, { i32, i32 }, { i32, i32, i32 } }, ptr %tuple.alloca38, i32 0, i32 2
   store { i32, i32, i32 } %access.tuple.access50, ptr %tuple.init.gep53, align 4
   %access.tuple.access54 = load { { i32 }, { i32, i32 }, { i32, i32, i32 } }, ptr %tuple.alloca38, align 4
-  call void @tests_tuple_nested.a.4({ { i32 }, { i32, i32 }, { i32, i32, i32 } } %access.tuple.access54)
+  call void ({ { i32 }, { i32, i32 }, { i32, i32, i32 } }, ...) @emit({ { i32 }, { i32, i32 }, { i32, i32, i32 } } %access.tuple.access54)
   ret void
 }
 
-define private void @tests_tuple_nested.a({ { i32 } } %parameter.x) {
-fn.entry:
-  ret void
-}
-
-define private void @tests_tuple_nested.a.1({ { ptr }, { ptr } } %parameter.x) {
-fn.entry:
-  ret void
-}
-
-define private void @tests_tuple_nested.a.2({ { i32 }, { ptr } } %parameter.x) {
-fn.entry:
-  ret void
-}
-
-define private void @tests_tuple_nested.a.3({ { i32 }, { i32 }, { i32 } } %parameter.x) {
-fn.entry:
-  ret void
-}
-
-define private void @tests_tuple_nested.a.4({ { i32 }, { i32, i32 }, { i32, i32, i32 } } %parameter.x) {
-fn.entry:
-  ret void
-}
+declare void @emit(...)

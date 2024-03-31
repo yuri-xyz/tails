@@ -428,12 +428,7 @@ pub enum SignatureKind {
 pub struct Signature {
   pub parameters: Vec<std::rc::Rc<Parameter>>,
   /// A type hint qualifying the return type of this signature.
-  ///
-  /// ## Note
-  ///
-  /// Only for use during type inference; all later stages should rely
-  /// on a type environment to resolve the type of this AST node instead.
-  pub return_type_hint: Option<types::Type>,
+  pub return_type_hint: types::Type,
   pub is_variadic: bool,
   pub kind: SignatureKind,
   pub return_type_id: symbol_table::TypeId,
@@ -490,7 +485,7 @@ impl Signature {
     };
 
     types::SignatureType {
-      return_type: Box::new(self.return_type_hint.clone().unwrap()),
+      return_type: Box::new(self.return_type_hint.clone()),
       parameter_types,
       arity_mode,
     }

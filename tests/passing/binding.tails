@@ -1,5 +1,5 @@
-func id<T>(x: T) -> unit:
-  pass
+foreign:
+  func emit(...) -> unit
 
 func tests() -> unit:
   -- unannotated
@@ -23,16 +23,17 @@ func tests() -> unit:
   let n: *int = null
 
   -- evaluate
-  id::<int>(a)
-  id::<int>(b)
-  id::<int>(c)
-  id::<*int>(d)
-  id::<*int>(null::*int)
-  id::<str>("hi")
-  id::<int>(123)
-  id::<bool>(false)
-  id::<() -> int>(i)
-  id::<() -> unit>(j)
-  id::<int>(l)
-  id::<int>(m)
-  id::<*int>(n)
+  unsafe:
+    emit(a)
+    emit(b)
+    emit(c)
+    emit(d)
+    emit(null::*int)
+    emit("hi")
+    emit(123)
+    emit(false)
+    emit(i)
+    emit(j)
+    emit(l)
+    emit(m)
+    emit(n)

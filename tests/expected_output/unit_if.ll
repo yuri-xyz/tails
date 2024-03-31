@@ -33,7 +33,7 @@ if.then6:                                         ; preds = %if.after1
   br label %if.after4
 
 if.after7:                                        ; preds = %if.then9, %if.else8
-  call void @tests_unit_if.unbox(ptr null)
+  call void (ptr, ...) @emit(ptr null)
   br i1 true, label %if.then12, label %if.else11
 
 if.else8:                                         ; preds = %if.after4
@@ -43,7 +43,7 @@ if.then9:                                         ; preds = %if.after4
   br label %if.after7
 
 if.after10:                                       ; preds = %if.then12, %if.else11
-  call void @tests_unit_if.unbox(ptr null)
+  call void (ptr, ...) @emit(ptr null)
   br i1 true, label %if.then15, label %if.else14
 
 if.else11:                                        ; preds = %if.after7
@@ -53,7 +53,7 @@ if.then12:                                        ; preds = %if.after7
   br label %if.after10
 
 if.after13:                                       ; preds = %if.then15, %if.else14
-  call void @tests_unit_if.unbox(ptr null)
+  call void (ptr, ...) @emit(ptr null)
   ret void
 
 if.else14:                                        ; preds = %if.after10
@@ -63,7 +63,4 @@ if.then15:                                        ; preds = %if.after10
   br label %if.after13
 }
 
-define private void @tests_unit_if.unbox(ptr %parameter.a) {
-fn.entry:
-  ret void
-}
+declare void @emit(...)

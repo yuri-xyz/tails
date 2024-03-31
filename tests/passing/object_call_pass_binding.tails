@@ -1,11 +1,12 @@
-type Obj = {a: int, b: int}
+foreign:
+  func emit(...) -> unit
 
-func unbox<T>(x: T) -> unit:
-  pass
+type Obj = {a: int, b: int}
 
 func tests() -> unit:
   let a: Obj = {a: 1, b: 2}
   let b: Obj = {a: 1, b: 2}
 
-  unbox::<Obj>(a)
-  unbox::<Obj>(b)
+  unsafe:
+    emit(a)
+    emit(b)

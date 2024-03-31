@@ -12,7 +12,7 @@ fn.entry:
 
 guard.continuation:                               ; preds = %fn.entry
   %access.dereference_op = load i8, ptr @stdin, align 1
-  call void @tests_access_foreign_var.a(ptr @stdin.1)
+  call void (ptr, ...) @emit(ptr @stdin.1)
   br i1 true, label %guard.continuation1, label %guard.failure
 
 guard.failure:                                    ; preds = %guard.continuation, %fn.entry
@@ -23,7 +23,7 @@ guard.failure:                                    ; preds = %guard.continuation,
 
 guard.continuation1:                              ; preds = %guard.continuation
   %access.dereference_op2 = load i8, ptr @stdin, align 1
-  call void @tests_access_foreign_var.a.2(i8 %access.dereference_op2)
+  call void (i8, ...) @emit(i8 %access.dereference_op2)
   ret void
 }
 
@@ -32,14 +32,6 @@ declare i32 @puts(ptr)
 ; Function Attrs: noreturn
 declare void @abort() #0
 
-define private void @tests_access_foreign_var.a(ptr %parameter.x) {
-fn.entry:
-  ret void
-}
-
-define private void @tests_access_foreign_var.a.2(i8 %parameter.x) {
-fn.entry:
-  ret void
-}
+declare void @emit(...)
 
 attributes #0 = { noreturn }

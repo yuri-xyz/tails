@@ -162,6 +162,15 @@ impl<'a> visit::Visitor for DeclarationContext {
     }
   }
 
+  fn visit_call_site(&mut self, call_site: &ast::CallSite) {
+    self.symbol_table.call_site_parent_functions.insert(
+      call_site.registry_id.to_owned(),
+      self
+        .current_function_id
+        .expect("call sites should always be present inside functions"),
+    );
+  }
+
   fn visit_type_def(&mut self, type_def: &ast::TypeDef) {
     self.try_declare(
       symbol_table::Symbol::new(type_def.name.to_owned(), symbol_table::SymbolKind::Type),

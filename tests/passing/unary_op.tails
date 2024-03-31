@@ -1,13 +1,14 @@
-func id<T>(x: T) -> unit:
-  pass
+foreign:
+  func emit(...) -> unit
 
 func tests() -> unit:
   let x = true
   let y = 123
 
-  discard id::<bool>(not x)
-  discard id::<bool>(not not x)
-  discard id::<bool>(not (not x))
-  discard id::<int>(-1)
-  discard id::<int>(-y)
-  discard id::<int>(-(-y))
+  unsafe:
+    emit(not x)
+    emit(not not x)
+    emit(not (not x))
+    emit(-1)
+    emit(-y)
+    emit(-(-y))

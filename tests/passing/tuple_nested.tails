@@ -1,9 +1,10 @@
-func a<T>(x: T) -> unit:
-  pass
+foreign:
+  func emit(...) -> unit
 
 func tests() -> unit:
-  a::<((int))>(((1,),))
-  a::<((*int), (*int))>(((null::*int,), (null::*int,)))
-  a::<((int), (str))>(((123,), ("test",)))
-  a::<((int), (int), (int))>(((1,), (2,), (3,)))
-  a::<((int), (int, int), (int, int, int))>(((1,), (1, 2), (1, 2, 3)))
+  unsafe:
+    emit(((1,),))
+    emit(((null::*int,), (null::*int,)))
+    emit(((123,), ("test",)))
+    emit(((1,), (2,), (3,)))
+    emit(((1,), (1, 2), (1, 2, 3)))

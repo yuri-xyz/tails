@@ -80,16 +80,11 @@ impl<'a> InferenceContext<'a> {
     &mut self,
     signature: &ast::Signature,
   ) -> types::SignatureType {
-    let return_type = if let Some(return_type_hint) = &signature.return_type_hint {
-      return_type_hint.to_owned()
-    } else {
-      self.create_type_variable("signature.return_type")
-    };
-
     // SAFETY: Should there be a debugging assertion ensuring that the signature's return type id has no corresponding entry on the type environment? But, if the function is inferred more than once, it would be indeed inserted multiple times. If so, make a note here of that fact.
-    self
-      .type_env
-      .insert(signature.return_type_id, return_type.to_owned());
+    self.type_env.insert(
+      signature.return_type_id,
+      signature.return_type_hint.to_owned(),
+    );
 
     let parameter_types = signature
       .parameters
@@ -103,7 +98,7 @@ impl<'a> InferenceContext<'a> {
       // variadic status should remain as non-variadic.
       arity_mode: types::ArityMode::Fixed,
       parameter_types,
-      return_type: Box::new(return_type.to_owned()),
+      return_type: Box::new(signature.return_type_hint.to_owned()),
     }
   }
 
@@ -862,8 +857,6 @@ impl Infer<'_> for ast::CallSite {
       // TODO: Properly handle result.
       .unwrap();
 
-    dbg!(callee_return_type.clone());
-
     context
       .type_env
       .insert(self.type_id, callee_return_type.clone());
@@ -912,12 +905,7 @@ impl Infer<'_> for ast::ForeignFunction {
       context.type_env.insert(parameter.type_id, parameter_type);
     }
 
-    let return_type = self
-      .signature
-      .return_type_hint
-      .as_ref()
-      .expect(auxiliary::BUG_FOREIGN_FN_TYPE_HINTS)
-      .to_owned();
+    let return_type = self.signature.return_type_hint.to_owned();
 
     let parameter_types = self
       .signature

@@ -1,9 +1,10 @@
-func unbox<T>(x: T) -> unit:
-  pass
+foreign:
+  func emit(...) -> unit
 
 func tests() -> unit:
   let a: (int) = (0,)
-  -- let b: (int, str) = (1, "test")
+  let b: (int, str) = (1, "test")
 
-  unbox::<(int)>(a)
-  -- unbox(b)
+  unsafe:
+    emit(a)
+    emit(b)

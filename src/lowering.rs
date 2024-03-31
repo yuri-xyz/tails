@@ -1044,12 +1044,7 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
     let signature_type = foreign_fn
       .signature
       .as_resolved_signature_type(
-        foreign_fn
-          .signature
-          .return_type_hint
-          .as_ref()
-          .expect(auxiliary::BUG_FOREIGN_FN_TYPE_HINTS)
-          .to_owned(),
+        foreign_fn.signature.return_type_hint.to_owned(),
         self.resolution_helper,
       )
       .expect(auxiliary::BUG_MISSING_TYPE);

@@ -1,7 +1,8 @@
-func unbox<T>(x: T) -> unit:
-  pass
+foreign:
+  func emit(...) -> unit
 
 func tests() -> unit:
-  unbox::<{a: int}>({a: 1})
-  unbox::<{a: int, b: int}>({a: 1, b: 2})
-  unbox::<{a: int, b: int, c: int}>({a: 1, b: 2, c: 3})
+  unsafe:
+    emit({a: 1})
+    emit({a: 1, b: 2})
+    emit({a: 1, b: 2, c: 3})
