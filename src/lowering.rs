@@ -16,7 +16,7 @@ use inkwell::{types::BasicType, values::BasicValue};
 use crate::{
   assert_extract, ast, auxiliary,
   lowering_ctx::{self, BUG_LLVM_VALUE},
-  resolution, symbol_table, types, visit,
+  symbol_table, types, visit,
 };
 
 pub(crate) const ENTRY_POINT_FUNCTION_NAME: &str = "main";
@@ -1051,7 +1051,6 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
           .expect(auxiliary::BUG_FOREIGN_FN_TYPE_HINTS)
           .to_owned(),
         self.resolution_helper,
-        self.universe_stack.clone(),
       )
       .expect(auxiliary::BUG_MISSING_TYPE);
 
@@ -1271,7 +1270,7 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
       ast::UnaryOperator::Dereference => {
         let operand_type = self
           .resolution_helper
-          .resolve_by_id(&unary_op.operand_type_id, self.universe_stack.clone())
+          .resolve_by_id(&unary_op.operand_type_id)
           .expect(auxiliary::BUG_MISSING_TYPE);
 
         let pointee_type = assert_extract!(operand_type.as_ref(), types::Type::Pointer);
@@ -1405,12 +1404,6 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
       _ => None,
     };
 
-    let own_universe_stack = resolution::push_to_universe_stack(
-      self.universe_stack.clone(),
-      call_site.universe_id.to_owned(),
-    )
-    .unwrap();
-
     // OPTIMIZE: Not used in all final branches, but cannot be made a closure because of unique access requirement to `self`.
     let argument_types = {
       call_site
@@ -1419,7 +1412,7 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
         .map(|argument| {
           self
             .resolution_helper
-            .resolve_by_id(&argument.type_id, own_universe_stack.clone())
+            .resolve_by_id(&argument.type_id)
             .map(|ty| ty.into_owned())
             .expect(auxiliary::BUG_MISSING_TYPE)
         })
@@ -1488,8 +1481,6 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
     &mut self,
     function: &ast::Function,
   ) -> Option<inkwell::values::BasicValueEnum<'llvm>> {
-    // TODO: Polymorphic functions should not be lowered by themselves; they can only be lowered when they are instantiated. Currently, if a polymorphic function isn't called, it will be lowered and then when its parameter types are lowered, it will throw an error because generic types cannot be lowered.
-
     // REVIEW: If we do choose to lower declarations such as functions on-demand (i.e. a reference to a function yet to be lowered), buffers would interfere with the lowering of such function, so we would need to stash buffers and pop them when entering and exiting functions.
 
     let memoization_key = (lowering_ctx::AccessMode::None, function.registry_id);
@@ -1514,11 +1505,7 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
 
     let signature_type = function
       .signature
-      .as_resolved_signature_type(
-        return_type,
-        self.resolution_helper,
-        self.universe_stack.clone(),
-      )
+      .as_resolved_signature_type(return_type, self.resolution_helper)
       .expect(auxiliary::BUG_MISSING_TYPE);
 
     let llvm_function_type = self.lower_signature_type(&signature_type, None);
@@ -1630,11 +1617,7 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
 
     let signature_type = closure
       .signature
-      .as_resolved_signature_type(
-        return_type,
-        self.resolution_helper,
-        self.universe_stack.clone(),
-      )
+      .as_resolved_signature_type(return_type, self.resolution_helper)
       .expect(auxiliary::BUG_MISSING_TYPE);
 
     let llvm_function_type = self.lower_signature_type(&signature_type, Some(&closure.captures));

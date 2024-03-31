@@ -625,12 +625,7 @@ impl Parser {
   fn parse_stub_type(&mut self) -> diagnostic::Maybe<types::StubType> {
     let path = self.parse_path(symbol_table::SymbolKind::Type)?;
 
-    Ok(types::StubType {
-      universe_id: self
-        .id_generator
-        .next_artifact_id(format!("stub_type.{}", path.base_name)),
-      path,
-    })
+    Ok(types::StubType { path })
   }
 
   /// %name (':' %type)?
@@ -717,7 +712,7 @@ impl Parser {
     })
   }
 
-  /// func %name (%generics)? %signature %block
+  /// func %name %signature %block
   fn parse_function(&mut self) -> diagnostic::Maybe<ast::Function> {
     self.skip_one(&lexer::TokenKind::Func)?;
 
@@ -850,7 +845,7 @@ impl Parser {
     })
   }
 
-  /// type %name (%generics)? = %type
+  /// type %name = %type
   fn parse_type_def(&mut self) -> diagnostic::Maybe<ast::TypeDef> {
     self.skip_one(&lexer::TokenKind::Type)?;
 
@@ -1085,10 +1080,8 @@ impl Parser {
       current_token_kind,
       // Object access.
       lexer::TokenKind::Dot
-        // Call site without generic hints.
+        // Call site.
         | lexer::TokenKind::ParenthesesL
-        // Call site with generic hints.
-        | lexer::TokenKind::ColonDouble
         // Pointer indexing.
         | lexer::TokenKind::BracketL
         | lexer::TokenKind::As
@@ -1414,14 +1407,7 @@ impl Parser {
       self.skip_comma(&TERMINATOR)?;
     }
 
-    let debug_name = if let Some(debug_name) = callee.find_debug_name() {
-      format!("call_site.{}", debug_name)
-    } else {
-      String::from("call_site")
-    };
-
     Ok(ast::CallSite {
-      universe_id: self.id_generator.next_artifact_id(debug_name),
       type_id: self.id_generator.next_type_id(),
       callee_type_id: self.id_generator.next_type_id(),
       registry_id: self.id_generator.next_registry_id(),
@@ -1437,7 +1423,6 @@ impl Parser {
     let callee = self.parse_expr()?;
 
     Ok(ast::CallSite {
-      universe_id: self.id_generator.next_artifact_id(String::from("pipe")),
       callee_expr: callee,
       type_id: self.id_generator.next_type_id(),
       callee_type_id: self.id_generator.next_type_id(),
@@ -1690,23 +1675,6 @@ impl Parser {
       package_name,
       module_name,
     })
-  }
-
-  /// '<' (%type ',')* '>'
-  fn parse_generic_hints(&mut self) -> diagnostic::Maybe<Vec<types::Type>> {
-    self.skip_one(&lexer::TokenKind::LessThan)?;
-
-    let mut generic_hints = Vec::new();
-
-    const TERMINATOR: lexer::TokenKind = lexer::TokenKind::GreaterThan;
-
-    // FIXME: This allows for empty generic arguments vector! Should that be allowed?
-    while self.until_terminator(&TERMINATOR)? {
-      generic_hints.push(self.parse_type()?);
-      self.skip_comma(&TERMINATOR)?;
-    }
-
-    Ok(generic_hints)
   }
 
   /// match %expr ':' %indent (%expr '=>' %expr)* '_' '=>' %expr %dedent

@@ -3,14 +3,9 @@ use crate::{
   types::{self, TypeStripError},
 };
 
-pub(crate) type UniverseStack = Vec<symbol_table::UniverseId>;
-
 #[derive(Debug)]
 pub(crate) enum TypeResolutionError {
   StubTypeMissingSymbolTableEntry,
-  EmptyUniverseStackWhenResolvingGeneric,
-  CouldNotFindSubstitutionInAnyUniverseInUniverseStack,
-  NoUniversesWhenResolvingGeneric,
 }
 
 impl From<types::DirectRecursionCheckError> for TypeResolutionError {
@@ -39,19 +34,6 @@ pub(crate) enum TypeResolutionByIdError {
   TypeResolutionError(TypeResolutionError),
 }
 
-pub(crate) fn push_to_universe_stack(
-  mut universe_stack: UniverseStack,
-  new_universe_id: symbol_table::UniverseId,
-) -> Result<UniverseStack, &'static str> {
-  if universe_stack.contains(&new_universe_id) {
-    return Err("universe stack should not contain the new universe id already");
-  }
-
-  universe_stack.push(new_universe_id);
-
-  Ok(universe_stack)
-}
-
 pub(crate) struct ResolutionHelper<'a> {
   pub base: BaseResolutionHelper<'a>,
   pub type_env: &'a symbol_table::TypeEnvironment,
@@ -70,19 +52,15 @@ impl<'a> ResolutionHelper<'a> {
   pub(crate) fn resolve_by_id(
     &'a self,
     type_id: &symbol_table::TypeId,
-    universe_stack: UniverseStack,
   ) -> Result<std::borrow::Cow<'a, types::Type>, TypeResolutionByIdError> {
     let ty = self
       .type_env
       .get(type_id)
       .ok_or(TypeResolutionByIdError::MissingEntryForTypeId)?;
 
-    self
-      .base
-      .resolve(ty, universe_stack)
-      .map_err(|type_resolution_error| {
-        TypeResolutionByIdError::TypeResolutionError(type_resolution_error)
-      })
+    self.base.resolve(ty).map_err(|type_resolution_error| {
+      TypeResolutionByIdError::TypeResolutionError(type_resolution_error)
+    })
   }
 }
 
@@ -102,7 +80,6 @@ impl<'a> BaseResolutionHelper<'a> {
   pub(crate) fn resolve<'b>(
     &'b self,
     ty: &'b types::Type,
-    universe_stack: UniverseStack,
   ) -> Result<std::borrow::Cow<'b, types::Type>, TypeResolutionError> {
     // Nothing to do if the type is already fully concrete.
     if ty.is_immediate_subtree_concrete() {
@@ -110,11 +87,11 @@ impl<'a> BaseResolutionHelper<'a> {
     }
 
     let resolution = match ty {
-      types::Type::Stub(stub_type) => self.resolve_stub_type(stub_type, universe_stack)?,
+      types::Type::Stub(stub_type) => self.resolve_stub_type(stub_type)?,
       // The type is not a stub, generic (at least at this layer), or a fully concrete type.
       // In other words, the type contains a nested stub, or generic at some level on its
       // subtree.
-      _ => self.resolve_within_subtree(ty, universe_stack)?,
+      _ => self.resolve_within_subtree(ty)?,
     };
 
     assert!(
@@ -128,22 +105,21 @@ impl<'a> BaseResolutionHelper<'a> {
   fn resolve_within_subtree<'b>(
     &self,
     ty: &types::Type,
-    universe_stack: UniverseStack,
   ) -> Result<std::borrow::Cow<'b, types::Type>, TypeResolutionError> {
     Ok(std::borrow::Cow::Owned(match ty {
-      types::Type::Pointer(pointee) => types::Type::Pointer(Box::new(
-        self.resolve(pointee, universe_stack)?.into_owned(),
-      )),
-      types::Type::Reference(pointee) => types::Type::Reference(Box::new(
-        self.resolve(pointee, universe_stack)?.into_owned(),
-      )),
+      types::Type::Pointer(pointee) => {
+        types::Type::Pointer(Box::new(self.resolve(pointee)?.into_owned()))
+      }
+      types::Type::Reference(pointee) => {
+        types::Type::Reference(Box::new(self.resolve(pointee)?.into_owned()))
+      }
       types::Type::Tuple(tuple) => types::Type::Tuple(types::TupleType(
         tuple
           .0
           .iter()
           // FIXME: Properly handle result.
           // OPTIMIZE: Avoid cloning.
-          .map(|ty| self.resolve(ty, universe_stack.clone()))
+          .map(|ty| self.resolve(ty))
           .collect::<Result<Vec<_>, _>>()?
           .into_iter()
           .map(|cow| cow.into_owned())
@@ -156,7 +132,7 @@ impl<'a> BaseResolutionHelper<'a> {
             accumulator.insert(
               field.0.to_owned(),
               // OPTIMIZE: Avoid cloning.
-              self.resolve(field.1, universe_stack.clone())?.into_owned(),
+              self.resolve(field.1)?.into_owned(),
             );
 
             Ok(accumulator)
@@ -169,15 +145,13 @@ impl<'a> BaseResolutionHelper<'a> {
         })
       }
       types::Type::Signature(signature) => {
-        let return_type = self
-          .resolve(&signature.return_type, universe_stack.clone())?
-          .into_owned();
+        let return_type = self.resolve(&signature.return_type)?.into_owned();
 
         let parameter_types = signature
           .parameter_types
           .iter()
           // OPTIMIZE: Avoid cloning.
-          .map(|param_type| self.resolve(param_type, universe_stack.clone()))
+          .map(|param_type| self.resolve(param_type))
           .collect::<Result<Vec<_>, _>>()?
           .into_iter()
           .map(|cow| cow.into_owned())
@@ -198,7 +172,6 @@ impl<'a> BaseResolutionHelper<'a> {
   pub(crate) fn resolve_stub_type<'b>(
     &'b self,
     stub_type: &'b types::StubType,
-    universe_stack: UniverseStack,
   ) -> Result<std::borrow::Cow<'b, types::Type>, TypeResolutionError> {
     let stripped_target = stub_type
       // OPTIMIZE: Avoid cloning.
@@ -206,9 +179,7 @@ impl<'a> BaseResolutionHelper<'a> {
       .strip_all_monomorphic_stub_layers(self.symbol_table)
       .or(Err(TypeResolutionError::StubTypeMissingSymbolTableEntry))?;
 
-    dbg!(stripped_target.clone());
-
-    let resolved_target = self.resolve(&stripped_target, universe_stack)?;
+    let resolved_target = self.resolve(&stripped_target)?;
 
     // OPTIMIZE: Avoid cloning; currently only cloning to satisfy borrow checker.
     return Ok(std::borrow::Cow::Owned(resolved_target.into_owned()));

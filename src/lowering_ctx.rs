@@ -1,6 +1,4 @@
-use crate::{
-  ast, auxiliary, inference, lowering, resolution, symbol_table, types, unification, visit::Visitor,
-};
+use crate::{ast, auxiliary, lowering, resolution, symbol_table, types, visit::Visitor};
 use inkwell::{types::BasicType, values::BasicValue};
 
 pub(crate) const BUG_LLVM_VALUE: &str = "should always yield an LLVM value";
@@ -74,7 +72,6 @@ pub struct LoweringContext<'a, 'llvm> {
   ///
   /// Used to place alloca instructions for optimization purposes.
   pub(crate) llvm_entry_block: Option<inkwell::basic_block::BasicBlock<'llvm>>,
-  pub(crate) universe_stack: resolution::UniverseStack,
   /// A flag that indicates how to treat or perform access (load) on certain nodes.
   ///
   /// Access is a term that describes the process of stripping a pointer layer from
@@ -153,7 +150,6 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
       resolution_helper,
       interned_string_literals: std::collections::HashMap::new(),
       runtime_guards_failure_buffers: std::collections::HashMap::new(),
-      universe_stack: resolution::UniverseStack::new(),
     })
   }
 
@@ -614,23 +610,11 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
   /// types.
   pub(crate) fn lower_artifact(
     &mut self,
-    artifact_id: symbol_table::UniverseId,
     item: &ast::Item,
   ) -> Option<inkwell::values::BasicValueEnum<'llvm>> {
     // CONSIDER: Adding support (via an optional parameter) for access mode. Only do this if it's actually used, otherwise keep it simple.
 
-    let previous_universe_stack = self.universe_stack.clone();
-    let mut temporary_universe_stack = self.universe_stack.clone();
-
-    temporary_universe_stack.push(artifact_id);
-    self.universe_stack = temporary_universe_stack;
-
     let llvm_value = self.visit_item(item);
-
-    // Once the monomorphic substitution environment has been prepared, proceed to
-    // lower the function. Any generic types encountered through the function's
-    // descendant nodes will be substituted with the monomorphic types.
-    self.universe_stack = previous_universe_stack;
 
     llvm_value
   }
@@ -1005,7 +989,7 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
     self
       .resolution_helper
       .base
-      .resolve(ty, self.universe_stack.to_owned())
+      .resolve(ty)
       .expect(BUG_INSTANTIATION)
   }
 
@@ -1015,7 +999,7 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
   ) -> std::borrow::Cow<'b, types::Type> {
     self
       .resolution_helper
-      .resolve_by_id(type_id, self.universe_stack.to_owned())
+      .resolve_by_id(type_id)
       .expect(BUG_INSTANTIATION)
   }
 

@@ -1,11 +1,8 @@
-use crate::{assert_extract, ast, auxiliary, resolution, symbol_table, types};
-
-pub type ConstraintSet = Vec<(resolution::UniverseStack, Constraint)>;
+use crate::{assert_extract, ast, auxiliary, symbol_table, types};
 
 #[derive(Clone, Debug)]
 pub(crate) struct InferenceResult {
-  pub constraints: ConstraintSet,
-  pub universe_id: Option<symbol_table::UniverseId>,
+  pub constraints: Vec<Constraint>,
   pub type_var_substitutions: symbol_table::SubstitutionEnv,
   pub type_env: symbol_table::TypeEnvironment,
   pub ty: types::Type,
@@ -13,7 +10,7 @@ pub(crate) struct InferenceResult {
 }
 
 pub(crate) struct InferenceOverallResult {
-  pub constraints: ConstraintSet,
+  pub constraints: Vec<Constraint>,
   pub type_var_substitutions: symbol_table::SubstitutionEnv,
   pub type_env: symbol_table::TypeEnvironment,
   pub next_id_count: usize,
@@ -24,9 +21,7 @@ pub(crate) struct InferenceContext<'a> {
   ///
   /// They are first gathered, then the unification algorithm is performed to solve types, at
   /// the last step of type inference.
-  constraints: ConstraintSet,
-  universe_stack: resolution::UniverseStack,
-  own_universe_id: Option<symbol_table::UniverseId>,
+  constraints: Vec<Constraint>,
   id_generator: auxiliary::IdGenerator,
   /// A type environment, exclusively associating type variables with their
   /// corresponding substitutions.
@@ -49,40 +44,20 @@ pub(crate) struct InferenceContext<'a> {
 }
 
 impl<'a> InferenceContext<'a> {
-  pub(crate) fn new(
-    symbol_table: &'a symbol_table::SymbolTable,
-    universe_id: Option<symbol_table::UniverseId>,
-    initial_id_count: usize,
-  ) -> Self {
+  pub(crate) fn new(symbol_table: &'a symbol_table::SymbolTable, initial_id_count: usize) -> Self {
     Self {
       symbol_table,
-      own_universe_id: universe_id,
-      constraints: ConstraintSet::new(),
-      universe_stack: resolution::UniverseStack::new(),
+      constraints: Vec::new(),
       id_generator: auxiliary::IdGenerator::new(initial_id_count),
       type_var_substitutions: symbol_table::SubstitutionEnv::new(),
       type_env: symbol_table::TypeEnvironment::new(),
     }
   }
 
-  pub(crate) fn inherit(&self, child_universe_id: Option<symbol_table::UniverseId>) -> Self {
-    let mut universe_stack = self.universe_stack.clone();
-
-    if let Some(parent_universe_id) = &self.own_universe_id {
-      assert!(
-        !universe_stack.contains(&parent_universe_id),
-        "the same construct should not be inferred twice on the same call stack (infinite loop?)"
-      );
-
-      universe_stack.push(parent_universe_id.to_owned());
-    }
-
+  pub(crate) fn inherit(&self) -> Self {
     Self {
       symbol_table: self.symbol_table,
-      // BUG: (test:binding) Because `.inherit` is called as the first thing, say on the call site inference function, the context gains the call site's universe id. Which means that constraints created for that context include the call site's universe id, for example, it's arguments! Its arguments should NOT contain the call site's universe id, only its callee when inferred, and also any 'left over' callee inference result types (which may be managed through 'catch-all' proxy functions here).
-      own_universe_id: child_universe_id,
-      universe_stack,
-      constraints: ConstraintSet::new(),
+      constraints: Vec::new(),
       id_generator: auxiliary::IdGenerator::new(self.id_generator.get_counter()),
       type_var_substitutions: symbol_table::SubstitutionEnv::new(),
       type_env: symbol_table::TypeEnvironment::new(),
@@ -193,7 +168,7 @@ impl<'a> InferenceContext<'a> {
   }
 
   pub(crate) fn transient(&self, inferable: &impl Infer<'a>) -> InferenceResult {
-    let mut context = self.inherit(None);
+    let mut context = self.inherit();
     let result = inferable.infer(&context);
     let ty = result.ty.clone();
 
@@ -213,32 +188,10 @@ impl<'a> InferenceContext<'a> {
 
   pub(crate) fn constrain(&mut self, inferable: &impl Infer<'a>, ty: types::Type) -> types::Type {
     let result = inferable.infer(self);
-    let mut constraint_universe_stack = self.universe_stack.clone();
 
-    // If the inference result contained a universe id, add it to the
-    // universe stack which will be associated with the constraint to be
-    // created. Note that such universe id does not affect the state's
-    // universe stack, it is only used for the constraint.
-    if let Some(universe_id) = &result.universe_id {
-      assert!(!constraint_universe_stack.contains(&universe_id));
-      constraint_universe_stack.push(universe_id.to_owned());
-    }
-
-    // Any constraints created should include the current context's
-    // universe id, in case that they are an artifact. For example, for
-    // call sites to polymorphic functions, since they create a signature
-    // type to constrain against their callee's type, that constraint should
-    // include the call site's universe id, otherwise it would end up trying to
-    // unify the callee's generic parameters without any artifact universe id.
-    if let Some(own_universe_id) = &self.own_universe_id {
-      assert!(!constraint_universe_stack.contains(&own_universe_id));
-      constraint_universe_stack.push(own_universe_id.to_owned());
-    }
-
-    self.constraints.push((
-      constraint_universe_stack,
-      Constraint::Equality(ty, result.ty.clone()),
-    ));
+    self
+      .constraints
+      .push(Constraint::Equality(ty, result.ty.clone()));
 
     let ty = result.ty.clone();
 
@@ -251,7 +204,6 @@ impl<'a> InferenceContext<'a> {
     let ty = if let Some(type_hint) = &parameter.type_hint {
       type_hint.to_owned()
     } else {
-      // BUG: The inference system needs to be revised with regards to the constraints against generics; If a constraint set involving a generic and a type variable occurs, and the inference function was invoked by an artifact, the type variables might not end up becoming generics: they may ta ...
       // If the parameter has no type hint, its type will remain as a
       // type variable.
       self.create_type_variable("parameter")
@@ -265,23 +217,7 @@ impl<'a> InferenceContext<'a> {
   }
 
   pub(crate) fn add_other_constraint(&mut self, constraint: Constraint) {
-    let mut universe_stack = self.universe_stack.clone();
-
-    // If the context's own constraint isn't considered, it would lead to a
-    // situation like the following example:
-    // 1. Call site inference context inherits from parent context.
-    // 2. Universe stack contains parent universe id, not call site's.
-    // 3. Any type on the call site's side is constrained against the callee's return type.
-    // 4. The callee's return type is a generic.
-    // 5. That constraint that was just created does NOT include the call site's universe id.
-    // 6. During unification of such constraint, the universe id is missing from the constraint's universe stack.
-    // 7. The generic cannot be resolved!
-    if let Some(own_universe_id) = &self.own_universe_id {
-      assert!(!universe_stack.contains(&own_universe_id));
-      universe_stack.push(own_universe_id.to_owned());
-    }
-
-    self.constraints.push((universe_stack, constraint));
+    self.constraints.push(constraint);
   }
 
   /// Create an equality constraint and add it to the constraint list,
@@ -292,13 +228,10 @@ impl<'a> InferenceContext<'a> {
 
   pub(crate) fn finalize(self, ty: types::Type) -> InferenceResult {
     // TODO: Handle result type.
-    let stripped_type = ty
-      .try_strip_all_monomorphic_stub_layers(self.symbol_table)
-      .unwrap();
+    let stripped_type = ty.try_strip_all_stub_layers(self.symbol_table).unwrap();
 
     InferenceResult {
       constraints: self.constraints,
-      universe_id: self.own_universe_id,
       type_var_substitutions: self.type_var_substitutions,
       type_env: self.type_env,
       id_count: self.id_generator.get_counter(),
@@ -320,7 +253,7 @@ impl<'a> InferenceContext<'a> {
     for (type_id, ty) in other.type_env {
       // CONSIDER: Changing it so that instead of the type environment containing one type, it contains a set/vector of types, all of which should be compatible with one another (must be verified through unification). This is safer, because it ensures that any version of the same AST node with any input parameters, produces a compatible type.
 
-      // TODO: If inference caching is added, add a check to ensure that no duplicates should ever be inserted into the type environment (assert that the current type environment doesn't contain the type id to be inserted). Also note that inference caching will need to consider polymorphic functions invoked from artifacts (in such cases, caching should not be used). But then, those polymorphic functions would be inserted multiple times onto the type environment...
+      // TODO: If inference caching is added, add a check to ensure that no duplicates should ever be inserted into the type environment (assert that the current type environment doesn't contain the type id to be inserted).
       self.type_env.insert(type_id, ty.clone());
     }
 
@@ -338,7 +271,7 @@ pub enum Constraint {
 pub(crate) trait Infer<'a> {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
     // Default implementations to unit type.
-    parent.inherit(None).finalize(types::Type::Unit)
+    parent.inherit().finalize(types::Type::Unit)
   }
 }
 
@@ -361,7 +294,7 @@ impl Infer<'_> for ast::Expr {
       ast::Expr::Group(group) => parent.transient(group.as_ref()),
       ast::Expr::Discard(discard) => parent.transient(discard.as_ref()),
       ast::Expr::PointerIndexing(pointer_indexing) => parent.transient(pointer_indexing.as_ref()),
-      ast::Expr::Pass(..) => parent.inherit(None).finalize(types::Type::Unit),
+      ast::Expr::Pass(..) => parent.inherit().finalize(types::Type::Unit),
       ast::Expr::If(if_) => parent.transient(if_.as_ref()),
       ast::Expr::Closure(closure) => parent.transient(closure.as_ref()),
       ast::Expr::Statement(statement) => parent.transient(statement.as_ref()),
@@ -396,7 +329,7 @@ impl Infer<'_> for ast::Item {
 
 impl Infer<'_> for ast::With {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let ty = context.visit(&self.object);
 
     // TODO: Constrain the deltas object to be a subtype of the object's type.
@@ -408,7 +341,7 @@ impl Infer<'_> for ast::With {
 
 impl Infer<'_> for ast::Parameter {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let ty = context.infer_parameter(self);
 
     context.finalize(ty)
@@ -425,7 +358,7 @@ impl Infer<'_> for ast::Union {
 
 impl Infer<'_> for ast::BinaryOp {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     let ty = match self.operator {
       ast::BinaryOperator::Add
@@ -482,7 +415,7 @@ impl Infer<'_> for ast::BinaryOp {
 
 impl Infer<'_> for ast::ForeignCluster {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     for foreign in &self.foreigns {
       context.visit(foreign);
@@ -494,7 +427,7 @@ impl Infer<'_> for ast::ForeignCluster {
 
 impl Infer<'_> for ast::ClosureCapture {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let ty = context.visit_target_via_link(&self.target_link_id).unwrap();
 
     context.type_env.insert(self.type_id, ty.clone());
@@ -505,7 +438,7 @@ impl Infer<'_> for ast::ClosureCapture {
 
 impl Infer<'_> for ast::Constant {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     context.constrain(self.value.as_ref(), self.ty.to_owned());
 
@@ -515,7 +448,7 @@ impl Infer<'_> for ast::Constant {
 
 impl Infer<'_> for ast::UnionVariant {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let context = parent.inherit(None);
+    let context = parent.inherit();
 
     let union_item = context
       .symbol_table
@@ -531,7 +464,7 @@ impl Infer<'_> for ast::UnionVariant {
 
 impl Infer<'_> for ast::PointerAssignment {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let pointee_type = context.create_type_variable("pointer_assignment.pointer.pointee");
     let pointer_type = types::Type::Pointer(Box::new(pointee_type.clone()));
 
@@ -544,7 +477,7 @@ impl Infer<'_> for ast::PointerAssignment {
 
 impl Infer<'_> for ast::PointerIndexing {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let ty = context.visit(&self.pointer);
 
     context.type_env.insert(self.type_id, ty.clone());
@@ -563,7 +496,7 @@ impl Infer<'_> for ast::PointerIndexing {
 
 impl Infer<'_> for ast::Discard {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     context.visit(&self.0);
 
@@ -573,7 +506,7 @@ impl Infer<'_> for ast::Discard {
 
 impl Infer<'_> for ast::TupleIndex {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let tuple_type = context.create_type_variable("tuple.access");
     let element_type = context.create_type_variable("tuple.access.element");
 
@@ -597,7 +530,7 @@ impl Infer<'_> for ast::TupleIndex {
 
 impl Infer<'_> for ast::UnionInstance {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let value_type = context.create_type_variable("union_instance.value");
 
     match &self.value {
@@ -643,7 +576,7 @@ impl Infer<'_> for ast::UnionInstance {
 
 impl Infer<'_> for ast::Tuple {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     let element_types = self
       .elements
@@ -661,27 +594,27 @@ impl Infer<'_> for ast::Tuple {
 
 impl Infer<'_> for ast::ForeignStatic {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    parent.inherit(None).finalize(self.ty.clone())
+    parent.inherit().finalize(self.ty.clone())
   }
 }
 
 impl Infer<'_> for ast::Range {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
     parent
-      .inherit(None)
+      .inherit()
       .finalize(types::Type::Range(self.start, self.end))
   }
 }
 
 impl Infer<'_> for ast::TypeDef {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    parent.inherit(None).finalize(self.body.to_owned())
+    parent.inherit().finalize(self.body.to_owned())
   }
 }
 
 impl Infer<'_> for ast::Block {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     for statement in &self.statements {
       // Statement's types are irrelevant. However, they still need to be
@@ -700,7 +633,7 @@ impl Infer<'_> for ast::Block {
 
 impl Infer<'_> for ast::Statement {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     match self {
       ast::Statement::Binding(binding) => context.visit(binding.as_ref()),
@@ -717,7 +650,7 @@ impl Infer<'_> for ast::Statement {
 
 impl Infer<'_> for ast::Function {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let signature_type = context.create_signature_type(&self.signature);
 
     // Cache the function type before inferring the body to allow
@@ -738,7 +671,7 @@ impl Infer<'_> for ast::Function {
 
 impl Infer<'_> for ast::Reference {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let ty = context.visit_target_via_link(&self.path.link_id).unwrap();
 
     context.type_env.insert(self.type_id, ty.clone());
@@ -749,7 +682,7 @@ impl Infer<'_> for ast::Reference {
 
 impl Infer<'_> for ast::Literal {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     let ty = match &self.kind {
       ast::LiteralKind::Bool(_) => types::Type::Primitive(types::PrimitiveType::Bool),
@@ -790,7 +723,7 @@ impl Infer<'_> for ast::Literal {
 
 impl Infer<'_> for ast::Cast {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let operand_type = context.visit(&self.operand);
 
     context
@@ -807,10 +740,8 @@ impl Infer<'_> for ast::Cast {
 
 impl Infer<'_> for ast::Binding {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
-    // TRACE: (test:vector_generics) Could it be that the bug related to the binding is due to the possibility that the value type here below is a generic type without any universe stack entry? It seems to be a type variable when printed to the console! Which may mean that it would be substituted to a generic type? If that's the case, that's a good indicator that the current inference system is quite fragile, especially around type variables, and the inference context and utility method logic needs to be more tightly isolated to prevent contamination or accidental logic bugs.
-    // TRACE: (test:vector_generics) The value's type is not constrained if no type hint is provided. This means that the value's type (a generic) is simply inserted into the type env map (as: type variable -> stub type -> generic). So where's the associated universe for it registered? Universes are normally registered/inserted alongside constraints, but since there is no constraint made, then the generic is left without the posibility of resolution?
     let value_type = if let Some(type_hint) = &self.type_hint {
       context.constrain(&self.value, type_hint.to_owned())
     } else {
@@ -830,7 +761,7 @@ impl Infer<'_> for ast::Binding {
 
 impl Infer<'_> for ast::UnaryOp {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     let operand_type = match &self.operator {
       ast::UnaryOperator::Not => types::Type::Primitive(types::PrimitiveType::Bool),
@@ -876,7 +807,7 @@ impl Infer<'_> for ast::If {
     // Conditions must always be of type boolean.
     const CONDITION_TYPE: types::Type = types::Type::Primitive(types::PrimitiveType::Bool);
 
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     context.constrain(&self.condition, CONDITION_TYPE);
 
@@ -914,13 +845,9 @@ impl Infer<'_> for ast::Unsafe {
 
 impl Infer<'_> for ast::CallSite {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    // TODO: If the callee is a generic function, and the amount of generic hints is LESS than the amount of generic parameters on the callee's generic object, then the remaining generic parameters should be inferred to type variables (to stay more idiomatic, pad the missing hints with `Infer`). Additionally, if any of the types are 'Infer`, then they should be substituted with fresh type variables (or should that occur during unification?). Actually, not precisely regarding the first point: generic hints must be provided ALL or NONE, if the user wants inference, THEY are forced to fill up the generic hints with `Infer` (by using '_'). In other words, under no circumstance should the amount of hints < the amount of generic parameters (unless they are not specified, in which case all the hints default to '_').
-
-    // TODO: (test:generics_hints_mismatch) Need to constrain call site's generic hints vs. parameters (this may need to be done by first resolving the callee's signature, and then unifying (creating constraints) against it). Obviously, cannot resolve callee's signature at this point (during inference), so it would need to be some sort of deferred constraining (the usual: creating a signature type with type variables for the callee's signature, and constraining it against the call site's signature).
-
     // TODO: Handle variadic functions more explicitly and carefully here.
 
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     // BUG: The assumption that the callee is a callable will not always hold true by this point; unification hasn't yet occurred! This will panic if the callee is indeed not a callable, instead of being more graceful with a diagnostic.
     let callee = self.strip_callee(context.symbol_table).unwrap();
@@ -931,7 +858,7 @@ impl Infer<'_> for ast::CallSite {
     let callee_return_type = callee_signature_type
       .return_type
       .to_owned()
-      .try_strip_all_monomorphic_stub_layers(context.symbol_table)
+      .try_strip_all_stub_layers(context.symbol_table)
       // TODO: Properly handle result.
       .unwrap();
 
@@ -953,8 +880,6 @@ impl Infer<'_> for ast::CallSite {
       })
       .collect::<Vec<_>>();
 
-    // FIXME: The parameter types are being created as type variables, so that they make take the 'form' of generics. But! They are also being constrained against the argument types. So what happens if those type variables get unified against argument types BEFORE being unified against the generics?! Actually, the unification order shouldn't even matter! If they get unified against generics, they become generics, then unified against arguments, it's argument type vs. generic. If they are just a clone of the argument types, it's argument type vs. generic. In other words, nothing changes! Add a note here about this, so that the same mistake isn't made in the future thinking that parameter types need to be type variables to take the 'form' of generics.
-
     let callee_type = types::Type::Signature(types::SignatureType {
       parameter_types: argument_types,
       return_type: Box::new(callee_return_type.clone()),
@@ -967,8 +892,6 @@ impl Infer<'_> for ast::CallSite {
 
     context.constrain(&self.callee_expr, callee_type);
 
-    // TRACE: (test:vector_generics) Finalizing with the return type of a function is problematic, because if the return value's type is a generic (say, as in the case with the id function), then a type variable that ultimately points to generic type would be returned. The problem is that that generic type is finalized with no associated universe. So when resolution occurs, there will be a missing universe for that generic type. This means that it must be somewhat reworked, seems like call chains must take into account universe stacks as the calls progress, to accommodate for this edge case.
-
     // The type of the call expression is that of the callee's return
     // type.
     context.finalize(callee_return_type)
@@ -977,7 +900,7 @@ impl Infer<'_> for ast::CallSite {
 
 impl Infer<'_> for ast::ForeignFunction {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     for parameter in &self.signature.parameters {
       let parameter_type = parameter
@@ -1040,7 +963,7 @@ impl Infer<'_> for ast::Sizeof {
       false,
     ));
 
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     context.type_env.insert(self.type_id, ty.clone());
 
@@ -1050,7 +973,7 @@ impl Infer<'_> for ast::Sizeof {
 
 impl Infer<'_> for ast::ObjectAccess {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let ty = context.create_type_variable("object_access.member");
 
     context.type_env.insert(self.type_id, ty.clone());
@@ -1072,7 +995,7 @@ impl Infer<'_> for ast::ObjectAccess {
 
 impl Infer<'_> for ast::Closure {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let signature_type = context.create_signature_type(&self.signature);
 
     // Cache the function type before inferring the body to allow
@@ -1095,7 +1018,7 @@ impl Infer<'_> for ast::Closure {
 
 impl Infer<'_> for ast::Object {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
 
     let fields = self
       .fields
@@ -1123,7 +1046,7 @@ impl Infer<'_> for ast::Object {
 
 impl Infer<'_> for ast::Match {
   fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    let mut context = parent.inherit(None);
+    let mut context = parent.inherit();
     let ty = context.create_type_variable("match.value");
     let subject_type = context.visit(&self.subject);
 

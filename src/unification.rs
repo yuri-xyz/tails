@@ -11,7 +11,7 @@ use crate::{assert_extract, diagnostic, inference, resolution, substitution, sym
 
 pub struct TypeUnificationContext<'a> {
   pub(crate) symbol_table: &'a symbol_table::SymbolTable,
-  /// Substitution map for type variables and generics.
+  /// Substitution map for type variables.
   substitutions: symbol_table::SubstitutionEnv,
   object_substitutions: symbol_table::SubstitutionEnv,
   resolution_helper: resolution::BaseResolutionHelper<'a>,
@@ -55,7 +55,7 @@ impl<'a> TypeUnificationContext<'a> {
   /// path.
   ///
   /// For this to be `true`, the type in question must be a type variable.
-  /// Any other type will yield `false`. In other words, stub and generic types
+  /// Any other type will yield `false`. In other words, stub types
   /// will not be resolved.
   ///
   /// This is used to avoid constructing infinite types.
@@ -116,21 +116,21 @@ impl<'a> TypeUnificationContext<'a> {
   pub(crate) fn solve_constraints(
     &mut self,
     partial_type_env: &symbol_table::TypeEnvironment,
-    constraints: &inference::ConstraintSet,
+    constraints: &Vec<inference::Constraint>,
   ) -> diagnostic::Maybe<symbol_table::TypeEnvironment> {
     // SAFETY: What if we have conflicting constraints? Say, we have different calls with different types to the same function? Or if the parameters are constrained to be something, yet the arguments are constrained to be different?
     let constraints = constraints
       .iter()
       // OPTIMIZE: Avoid cloning.
       .cloned()
-      .filter(|constraint| matches!(constraint.1, inference::Constraint::Equality(..)))
+      .filter(|constraint| matches!(constraint, inference::Constraint::Equality(..)))
       .collect::<Vec<_>>();
 
     let mut diagnostics_helper = diagnostic::DiagnosticsHelper::default();
 
     // Solve all equality constraints.
-    for (universe_stack, constraint) in constraints.clone() {
-      diagnostics_helper.extend(self.dispatch_constraint(&universe_stack, constraint))?;
+    for constraint in constraints.clone() {
+      diagnostics_helper.extend(self.dispatch_constraint(constraint))?;
     }
 
     let mut solutions = symbol_table::TypeEnvironment::new();
@@ -148,8 +148,6 @@ impl<'a> TypeUnificationContext<'a> {
     for (id, ty) in partial_type_env {
       let substitution = match substitution_helper.substitute(ty) {
         Ok(substitution) => substitution,
-        // REVISE: Don't just return this error; add it to the diagnostics helper, and return the diagnostics helper. This way, multiple diagnostics are aggregated.
-        Err(substitution::SubstitutionError::TypeStripError(types::TypeStripError::RecursionDetected)) => return Err(vec![diagnostic::Diagnostic::RecursiveType(ty.to_owned())]),
         // This would constitute a logic bug in where the name resolution pass
         // did not properly fill in all entries.
         Err(substitution::SubstitutionError::TypeStripError(types::TypeStripError::SymbolTableMissingEntry)) | Err(substitution::SubstitutionError::DirectRecursionCheckError(types::DirectRecursionCheckError::SymbolTableMissingEntry)) => unreachable!("name resolution should have previously registered all links and nodes in the symbol table")
@@ -157,7 +155,7 @@ impl<'a> TypeUnificationContext<'a> {
 
       // REVISE: Perform stub type stripping on each unification call step instead of everywhere else. This way, there shouldn't need to be a need to strip stub types on subsequent phases after unification has occurred (including here).
       let stripped_substitution = substitution
-        .try_strip_all_monomorphic_stub_layers(self.symbol_table)
+        .try_strip_all_stub_layers(self.symbol_table)
         // FIXME: Properly handle result.
         .unwrap();
 
@@ -189,14 +187,10 @@ impl<'a> TypeUnificationContext<'a> {
     diagnostics_helper.try_return_value(solutions)
   }
 
-  fn dispatch_constraint(
-    &mut self,
-    universe_stack: &resolution::UniverseStack,
-    constraint: inference::Constraint,
-  ) -> diagnostic::Maybe {
+  fn dispatch_constraint(&mut self, constraint: inference::Constraint) -> diagnostic::Maybe {
     match &constraint {
       // Equality between two types.
-      inference::Constraint::Equality(type_a, type_b) => self.unify(type_a, type_b, universe_stack),
+      inference::Constraint::Equality(type_a, type_b) => self.unify(type_a, type_b),
     }
   }
 }
@@ -218,12 +212,7 @@ impl TypeUnificationContext<'_> {
   ///
   /// If one or both given types are *partial* (ie. stub types), they will be
   /// fully resolved into concrete types before continuing to unify.
-  pub(crate) fn unify(
-    &mut self,
-    type_a: &types::Type,
-    type_b: &types::Type,
-    universe_stack: &resolution::UniverseStack,
-  ) -> diagnostic::Maybe {
+  pub(crate) fn unify(&mut self, type_a: &types::Type, type_b: &types::Type) -> diagnostic::Maybe {
     // CONSIDER: Since various types have substitution ids, consider creating a `find_substitution_id` for types and resolving it automatically here on top, then removing the resolution logic from the match cases (this simplifies and standardizes the substitution procedure). Then, on the actual match cases, if they're reached it means that substitution couldn't be performed, thus we just have that logic for when they couldn't be substituted there (if any). This will also make it much easier to implement new types that may require substitution. The logic for when the substitution is itself will also need to added, to avoid infinite loops. The same abstraction can be used for the occurs check.
 
     // TODO: Add an example of a case to demonstrate why this is the case (order matters for match cases), and explain clearly in which path what should occur and why.
@@ -235,24 +224,24 @@ impl TypeUnificationContext<'_> {
       // substitutions for type variables.
       (types::Type::Variable(type_variable), other)
       | (other, types::Type::Variable(type_variable)) => {
-        self.unify_type_variable(type_variable, other, universe_stack)
+        self.unify_type_variable(type_variable, other)
       }
       (types::Type::Opaque, types::Type::Opaque) => Ok(()),
       (types::Type::Unit, types::Type::Unit) => Ok(()),
       (types::Type::Stub(stub), other) | (other, types::Type::Stub(stub)) => {
-        self.unify_stub(stub, other, universe_stack)
+        self.unify_stub(stub, other)
       }
       (types::Type::Tuple(tuple_a), types::Type::Tuple(tuple_b)) => {
-        self.unify_tuples(tuple_a, tuple_b, universe_stack)
+        self.unify_tuples(tuple_a, tuple_b)
       }
       (types::Type::Pointer(pointee_a), types::Type::Pointer(pointee_b)) => {
-        self.unify(pointee_a.as_ref(), pointee_b.as_ref(), &universe_stack)
+        self.unify(pointee_a.as_ref(), pointee_b.as_ref())
       }
       (types::Type::Signature(signature_a), types::Type::Signature(signature_b)) => {
-        self.unify_signatures(signature_a, signature_b, universe_stack)
+        self.unify_signatures(signature_a, signature_b)
       }
       (types::Type::Reference(pointee_a), types::Type::Reference(pointee_b)) => {
-        self.unify(&pointee_a, &pointee_b, &universe_stack)
+        self.unify(&pointee_a, &pointee_b)
       }
       // Opaque pointers are incompatible with typed pointers. They must be casted
       // before any pointer operation is performed on them.
@@ -261,7 +250,7 @@ impl TypeUnificationContext<'_> {
         Err(vec![diagnostic::Diagnostic::OpaquePointerMustBeCasted])
       }
       (types::Type::Object(object_a), types::Type::Object(object_b)) => {
-        self.unify_objects(object_a, object_b, universe_stack)
+        self.unify_objects(object_a, object_b)
       }
       (types::Type::Union(union_a), types::Type::Union(union_b)) => {
         if union_a.registry_id != union_b.registry_id {
@@ -293,7 +282,6 @@ impl TypeUnificationContext<'_> {
     &mut self,
     raw_object_a: &types::ObjectType,
     raw_object_b: &types::ObjectType,
-    universe_stack: &resolution::UniverseStack,
   ) -> diagnostic::Maybe {
     // REVISE: Abstracting these repetitive substitution logic of multiple types to just finding the substitution id and substituting then re-trying unification if a substitution does exist and it isn't the same as the original type.
     // OPTIMIZE: Avoid cloning.
@@ -316,7 +304,7 @@ impl TypeUnificationContext<'_> {
     // Regardless of the kind of objects, their intersecting fields
     // should always match and thus be unified.
     for (field_a, field_b) in &intersection {
-      diagnostics_helper.extend(self.unify(field_a, field_b, &universe_stack))?;
+      diagnostics_helper.extend(self.unify(field_a, field_b))?;
     }
 
     // TODO: Add passing tests representing each and every single case and edge case outlined here.
@@ -384,12 +372,7 @@ impl TypeUnificationContext<'_> {
     diagnostics_helper.extend(result)
   }
 
-  fn unify_stub(
-    &mut self,
-    stub_type: &types::StubType,
-    other: &types::Type,
-    universe_stack: &resolution::UniverseStack,
-  ) -> diagnostic::Maybe {
+  fn unify_stub(&mut self, stub_type: &types::StubType, other: &types::Type) -> diagnostic::Maybe {
     let strip_result = stub_type
       // OPTIMIZE: Avoid cloning.
       .to_owned()
@@ -397,11 +380,6 @@ impl TypeUnificationContext<'_> {
 
     let stripped_target = match strip_result {
       Ok(stripped_target) => stripped_target,
-      Err(types::TypeStripError::RecursionDetected) => {
-        return Err(vec![diagnostic::Diagnostic::RecursiveType(
-          types::Type::Stub(stub_type.to_owned()),
-        )]);
-      }
       Err(types::TypeStripError::SymbolTableMissingEntry) => {
         // REVISE: Find a way to use `auxiliary::BUG_RESOLUTION` instead.
         unreachable!("name resolution should have previously registered all links and nodes in the symbol table")
@@ -413,17 +391,17 @@ impl TypeUnificationContext<'_> {
       // initial universe stack, as the resolution function already inserts it.
       let resolution = self
         .resolution_helper
-        .resolve_stub_type(polymorphic_stub_type, universe_stack.clone())
+        .resolve_stub_type(polymorphic_stub_type)
         .unwrap()
         // OPTIMIZE: Any way to avoid cloning? Possibly accept `std::borrow::Cow` on the `unify` function, or would that be too much?
         .into_owned();
 
       // Continue unification, but against the stub type's resolution.
-      return self.unify(&resolution, other, universe_stack);
+      return self.unify(&resolution, other);
     }
 
     // REVIEW: What if the target is an artifact that accepts generics, but none were provided? Should that be reported here?
-    self.unify(&stripped_target, other, universe_stack)
+    self.unify(&stripped_target, other)
   }
 
   fn check_arity_mode_requirements(
@@ -489,7 +467,6 @@ impl TypeUnificationContext<'_> {
     &mut self,
     signature_a: &types::SignatureType,
     signature_b: &types::SignatureType,
-    universe_stack: &resolution::UniverseStack,
   ) -> diagnostic::Maybe {
     let is_any_variadic =
       signature_a.arity_mode.is_variadic() || signature_b.arity_mode.is_variadic();
@@ -522,13 +499,12 @@ impl TypeUnificationContext<'_> {
       .iter()
       .zip(signature_b.parameter_types.iter())
     {
-      diagnostics_helper.extend(self.unify(parameter_a, parameter_b, universe_stack))?;
+      diagnostics_helper.extend(self.unify(parameter_a, parameter_b))?;
     }
 
     diagnostics_helper.extend(self.unify(
       signature_a.return_type.as_ref(),
       signature_b.return_type.as_ref(),
-      universe_stack,
     ))
   }
 
@@ -536,7 +512,6 @@ impl TypeUnificationContext<'_> {
     &mut self,
     tuple_a: &types::TupleType,
     tuple_b: &types::TupleType,
-    universe_stack: &resolution::UniverseStack,
   ) -> diagnostic::Maybe {
     let mut diagnostics_helper = diagnostic::DiagnosticsHelper::default();
     let types_a = &tuple_a.0;
@@ -547,7 +522,7 @@ impl TypeUnificationContext<'_> {
     }
 
     for (type_a, type_b) in types_a.iter().zip(types_b.iter()) {
-      diagnostics_helper.extend(self.unify(type_a, type_b, universe_stack))?;
+      diagnostics_helper.extend(self.unify(type_a, type_b))?;
     }
 
     diagnostics_helper.check()
@@ -557,7 +532,6 @@ impl TypeUnificationContext<'_> {
     &mut self,
     type_variable: &types::TypeVariable,
     other_type: &types::Type,
-    universe_stack: &resolution::UniverseStack,
   ) -> diagnostic::Maybe {
     // If both types are the same type variable do nothing as
     // they are equivalent; there is no need to verify anything further.
@@ -571,11 +545,7 @@ impl TypeUnificationContext<'_> {
       type_variable.try_substitute_self(&self.substitutions)
     {
       // OPTIMIZE: Avoid cloning.
-      return self.unify(
-        &existing_substitution.to_owned(),
-        other_type,
-        universe_stack,
-      );
+      return self.unify(&existing_substitution.to_owned(), other_type);
     }
     // If it is a type variable which is bound in the substitution
     // environment, unify with the binding instead. This way we get
@@ -587,7 +557,6 @@ impl TypeUnificationContext<'_> {
           type_variable,
           // OPTIMIZE: Avoid redundant cloning.
           &other_substitution.to_owned(),
-          universe_stack,
         );
       }
     }
@@ -697,10 +666,7 @@ mod tests {
     // TODO: Add actual constraints to complete this test.
 
     assert!(unification_ctx
-      .solve_constraints(
-        &symbol_table::TypeEnvironment::new(),
-        &inference::ConstraintSet::new()
-      )
+      .solve_constraints(&symbol_table::TypeEnvironment::new(), &Vec::new())
       .is_ok());
   }
 }

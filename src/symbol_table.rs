@@ -12,7 +12,7 @@
 //! declarations. This pass is also responsible for checking for name conflicts and other errors
 //! related to symbols and declarations.
 
-use crate::{ast, instantiation, types};
+use crate::{ast, types};
 
 /// A unique, exclusive identifier for declaration nodes.
 ///
@@ -48,23 +48,13 @@ pub struct SubstitutionId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub struct LinkId(pub usize);
 
-/// An instantiation artifact is an item that may reference a polymorphic
-/// item, and that may provide hints for its instantiation. For example,
-/// a call site to a polymorphic function is considered an instantiation
-/// artifact.
-///
-/// Artifact ids uniquely identify such artifacts, and are primarily used
-/// for the retrieval of the artifact's generic substitution environment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub struct UniverseId(pub usize, pub String);
-
 /// A type environment that contains the instantiated types of various nodes.
 ///
 /// All type aliases have been resolved before being stored here, therefore
 /// stored types are guaranteed to be resolved, and do not further any alias resolution.
 pub type TypeEnvironment = std::collections::HashMap<TypeId, types::Type>;
 
-/// A mapping of type variables or generics to other type variables or monomorphic types.
+/// A mapping of type variables to other type variables or monomorphic types.
 /// Also known as a universe of types.
 ///
 /// This is used during type unification as the substitution environment used
@@ -231,8 +221,7 @@ pub struct SymbolTable {
   /// which would otherwise require an AST traversal to find. By storing it using a
   /// hash map, direct access is guaranteed on subsequent phases.
   pub(crate) registry: std::collections::HashMap<RegistryId, RegistryItem>,
-  pub(crate) call_site_parent_functions: std::collections::HashMap<UniverseId, RegistryId>,
-  pub(crate) artifacts: std::collections::HashMap<UniverseId, instantiation::Artifact>,
+  pub(crate) call_site_parent_functions: std::collections::HashMap<RegistryId, RegistryId>,
   /// A collection of owned/nested generic types by items, with the intent to provide
   /// a direct and efficient method to acquire all the raw generic types present within
   /// an item, without having to traverse the item to find them.

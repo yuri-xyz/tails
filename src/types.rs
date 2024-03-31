@@ -77,7 +77,6 @@ pub struct SignatureType {
 /// Type stubs can only point to: type definitions, generics, and unions.
 #[derive(Debug, Clone)]
 pub struct StubType {
-  pub universe_id: symbol_table::UniverseId,
   pub path: ast::Path,
 }
 
@@ -101,18 +100,11 @@ impl StubType {
     // OPTIMIZE: Use reference to avoid taking ownership of `self`.
 
     let mut current = self;
-    let mut seen_stub_types = std::collections::HashSet::new();
 
     // Strip away all stub layers that have no generic parameters; they
     // are simple layers and don't require any kind of instantiation or
     // substitution.
     loop {
-      if seen_stub_types.contains(&current.universe_id) {
-        return Err(TypeStripError::RecursionDetected);
-      }
-
-      seen_stub_types.insert(current.universe_id.to_owned());
-
       let target_registry_item = symbol_table
         .follow_link(&current.path.link_id)
         .ok_or(TypeStripError::SymbolTableMissingEntry)?;
@@ -230,7 +222,6 @@ impl<'a> Iterator for ImmediateSubtreeIterator<'a> {
 /// associated target types.
 pub(crate) struct IndirectSubtreeIterator<'a> {
   stack: Vec<Type>,
-  seen_stub_types: std::collections::HashSet<symbol_table::UniverseId>,
   symbol_table: &'a symbol_table::SymbolTable,
 }
 
@@ -241,7 +232,6 @@ impl<'a> IndirectSubtreeIterator<'a> {
 
     IndirectSubtreeIterator {
       stack,
-      seen_stub_types: std::collections::HashSet::new(),
       symbol_table,
     }
   }
@@ -256,17 +246,7 @@ impl<'a> Iterator for IndirectSubtreeIterator<'a> {
       None => return None,
     };
 
-    if let Type::Stub(stub_type) = &ty {
-      if self.seen_stub_types.contains(&stub_type.universe_id) {
-        return Some(Err(TypeStripError::RecursionDetected));
-      }
-
-      self
-        .seen_stub_types
-        .insert(stub_type.universe_id.to_owned());
-    }
-
-    let stripped_type = match ty.try_strip_all_monomorphic_stub_layers(self.symbol_table) {
+    let stripped_type = match ty.try_strip_all_stub_layers(self.symbol_table) {
       Ok(stripped_type) => stripped_type,
       Err(type_strip_error) => return Some(Err(type_strip_error)),
     };
@@ -283,7 +263,6 @@ impl<'a> Iterator for IndirectSubtreeIterator<'a> {
 #[derive(Debug)]
 pub(crate) enum TypeStripError {
   SymbolTableMissingEntry,
-  RecursionDetected,
 }
 
 #[derive(Debug)]
@@ -337,63 +316,11 @@ pub enum Type {
 }
 
 impl Type {
-  /// Check that a given type does not contain nested recursion in its subtree.
-  /// This checks for singular, or direct recursion, but will not identify mutual
-  /// recursion, as more complicated considerations and possibly multiple contexts
-  /// are required to detect mutual recursion.
-  pub(crate) fn contains_directly_recursive_types(
-    &self,
-    symbol_table: &symbol_table::SymbolTable,
-  ) -> Result<bool, DirectRecursionCheckError> {
-    let mut recursion_detected = false;
-    let mut seen_stub_types = std::collections::HashSet::<symbol_table::UniverseId>::new();
-
-    for inner_type_result in self.get_indirect_subtree_iter(symbol_table) {
-      let inner_type = match inner_type_result {
-        Ok(inner_type) => inner_type,
-        Err(type_strip_error) => match type_strip_error {
-          TypeStripError::RecursionDetected => return Ok(true),
-          TypeStripError::SymbolTableMissingEntry => {
-            return Err(DirectRecursionCheckError::SymbolTableMissingEntry)
-          }
-        },
-      };
-
-      // TODO: Write a test for this issue to ensure it doesn't occur again.
-      // NOTE: Generics don't need to be considered here, because there is
-      // always a type stub that points to such generic, so considering the
-      // type stub instead is better, because every type stub is guaranteed
-      // to be unique. If generics were to be considered, in cases where there
-      // is usage of the same generic more than once, this would incorrectly
-      // flag it as recursive. For example: `type A<T> = {a: T, b: T}`.
-      if let Type::Stub(stub_type) = &inner_type {
-        if seen_stub_types.contains(&stub_type.universe_id) {
-          recursion_detected = true;
-        }
-
-        seen_stub_types.insert(stub_type.universe_id.to_owned());
-
-        break;
-      }
-
-      // Continue while recursion hasn't been detected.
-    }
-
-    Ok(recursion_detected)
-  }
-
   pub(crate) fn get_immediate_subtree_iter(&self) -> ImmediateSubtreeIterator<'_> {
     ImmediateSubtreeIterator::new(self)
   }
 
-  pub(crate) fn get_indirect_subtree_iter<'a>(
-    &'a self,
-    symbol_table: &'a symbol_table::SymbolTable,
-  ) -> IndirectSubtreeIterator<'_> {
-    IndirectSubtreeIterator::new(self, symbol_table)
-  }
-
-  pub(crate) fn try_strip_all_monomorphic_stub_layers(
+  pub(crate) fn try_strip_all_stub_layers(
     self,
     symbol_table: &symbol_table::SymbolTable,
   ) -> Result<Type, TypeStripError> {
@@ -432,9 +359,9 @@ impl Type {
     matches!(self, Type::Stub(..) | Type::Variable(..))
   }
 
-  /// A concrete type is any type that is not a meta type (ex. generic,
-  /// stub, type variable, etc.) and whose entire inner type subtree is
-  /// also concrete.
+  /// A concrete type is any type that is not a meta type (ex. stub,
+  /// ype variable, etc.) and whose entire inner type subtree is also
+  /// concrete.
   pub(crate) fn is_immediate_subtree_concrete(&self) -> bool {
     // NOTE: Nested stub types without generic hints (non-polymorphic stub types)
     // might seem like they may be considered concrete (because they would simply

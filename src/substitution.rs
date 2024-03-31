@@ -100,16 +100,7 @@ impl<'a> UnificationSubstitutionHelper<'a> {
 
     // The type should be stripped of all simple, monomorphic stub type
     // layers before processing.
-    let stripped_type = ty
-      .to_owned()
-      .try_strip_all_monomorphic_stub_layers(self.symbol_table)?;
-
-    // Recursive types are not yet supported.
-    if stripped_type.contains_directly_recursive_types(self.symbol_table)? {
-      // TODO: Properly handle this case.
-      todo!();
-      // return Err(SubstitutionError::RecursiveTypeDetected);
-    }
+    let stripped_type = ty.to_owned().try_strip_all_stub_layers(self.symbol_table)?;
 
     match &stripped_type {
       types::Type::Pointer(pointee) => Ok(self.substitute(pointee.as_ref())?.into_pointer_type()),

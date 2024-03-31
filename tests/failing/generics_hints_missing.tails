@@ -1,5 +1,0 @@
-func a<T>() -> unit:
-  pass
-
-func tests() -> unit:
-  a()

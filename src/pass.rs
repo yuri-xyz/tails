@@ -1,8 +1,8 @@
 //! Contains utilities for the orchestration and execution of passes.
 
 use crate::{
-  ast, auxiliary, declare, diagnostic, inference, lifetime, link, lowering_ctx, resolution,
-  semantics, symbol_table, unification,
+  ast, auxiliary, declare, diagnostic, inference, link, lowering_ctx, resolution, semantics,
+  symbol_table, unification,
   visit::{Visitable, Visitor},
 };
 
@@ -178,39 +178,6 @@ impl Pass for LoweringPass {
 }
 
 #[derive(Default)]
-pub struct LifetimeAnalysisPass;
-
-impl Pass for LifetimeAnalysisPass {
-  fn get_info(&self) -> PassInfo {
-    PassInfo {
-      id: PassId::LifetimeAnalysis,
-      kind: PassKind::Analysis,
-    }
-  }
-
-  fn run_on_module<'a>(
-    &mut self,
-    module: &ast::Module,
-    context: &mut ExecutionContext<'a>,
-  ) -> PassResult {
-    let symbol_table = require_dependency!(&context.symbol_table);
-    let type_env = require_dependency!(&context.type_env);
-    let resolution_helper = resolution::ResolutionHelper::new(symbol_table, type_env);
-
-    let mut lifetime_analysis_ctx =
-      lifetime::LifetimeAnalysisContext::new(symbol_table, &resolution_helper);
-
-    lifetime_analysis_ctx.visit_module(module);
-
-    for global_item in &module.global_items {
-      global_item.traverse(&mut lifetime_analysis_ctx);
-    }
-
-    diagnostic::DiagnosticsHelper::from(lifetime_analysis_ctx.diagnostics).into_pass_result()
-  }
-}
-
-#[derive(Default)]
 pub struct DeclarePass;
 
 impl Pass for DeclarePass {
@@ -276,7 +243,7 @@ impl LinkPass {
         };
 
         let call_site_origin = symbol_table.call_site_parent_functions
-          .get(&call_site.universe_id)
+          .get(&call_site.registry_id)
           .expect("all call sites should have a corresponding parent function declaration id on the symbol table");
 
         if let ast::Callable::Function(callee_function) = callee {
@@ -364,9 +331,7 @@ impl Pass for TypeInferencePass {
     context: &mut ExecutionContext<'a>,
   ) -> PassResult {
     let symbol_table = require_dependency!(&context.symbol_table);
-
-    let mut inference_context =
-      inference::InferenceContext::new(symbol_table, None, context.id_count);
+    let mut inference_context = inference::InferenceContext::new(symbol_table, context.id_count);
 
     for global_item in &module.global_items {
       inference_context.visit(global_item);
@@ -493,7 +458,6 @@ impl<'a> PassManager<'a> {
   pub fn add_all_passes(&mut self) {
     self.add_primary_passes();
     self.add_default_pass::<SemanticCheckPass>();
-    self.add_default_pass::<LifetimeAnalysisPass>();
   }
 
   // OPTIMIZE: There's a big optimization opportunity for visiting analysis passes that presents itself by using a pass manager. For all analysis passes, perform a single AST traversal, and abstract it here via the pass manager.

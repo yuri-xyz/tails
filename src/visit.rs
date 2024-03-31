@@ -8,14 +8,6 @@ macro_rules! define_visit_fn {
   };
 }
 
-pub(crate) trait ArtifactVisitor {
-  fn get_universe_stack(&self) -> &resolution::UniverseStack;
-
-  fn set_universe_stack(&mut self, universe_stack: resolution::UniverseStack);
-
-  fn push_universe_id(&mut self, universe_id: symbol_table::UniverseId);
-}
-
 pub trait Visitor<T = ()> {
   fn default_value(&mut self) -> T;
 

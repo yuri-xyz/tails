@@ -1,10 +1,28 @@
 use crate::{
-  assert_extract, ast, auxiliary, diagnostic, instantiation, lowering, resolution, symbol_table,
-  types, visit,
+  assert_extract, ast, auxiliary, diagnostic, inference, lowering, resolution, symbol_table, types,
+  unification, visit,
 };
 
+/// Unify two types for equality to determine whether they are
+/// equal.
+pub fn compare_by_unification(
+  type_a: types::Type,
+  type_b: types::Type,
+  symbol_table: &symbol_table::SymbolTable,
+) -> bool {
+  // TODO: Get rid of this. Type comparisons should only occur during the unification process.
+
+  let mut type_unification_context =
+    unification::TypeUnificationContext::new(symbol_table, symbol_table::SubstitutionEnv::new());
+
+  let constraints = vec![inference::Constraint::Equality(type_a, type_b)];
+
+  type_unification_context
+    .solve_constraints(&symbol_table::TypeEnvironment::new(), &constraints)
+    .is_ok()
+}
+
 pub struct SemanticCheckContext<'a> {
-  universe_stack: resolution::UniverseStack,
   in_unsafe_scope: bool,
   in_unsafe_scope_stack: Vec<bool>,
   current_function_id: Option<symbol_table::RegistryId>,
@@ -25,7 +43,6 @@ impl<'a> SemanticCheckContext<'a> {
       in_unsafe_scope: false,
       in_unsafe_scope_stack: Vec::new(),
       current_function_id: None,
-      universe_stack: resolution::UniverseStack::new(),
       function_id_stack: Vec::new(),
       resolution_helper,
     }
@@ -105,21 +122,6 @@ impl<'a> SemanticCheckContext<'a> {
   }
 }
 
-impl<'a> visit::ArtifactVisitor for SemanticCheckContext<'a> {
-  fn get_universe_stack(&self) -> &resolution::UniverseStack {
-    &self.universe_stack
-  }
-
-  fn push_universe_id(&mut self, universe_id: symbol_table::UniverseId) {
-    assert!(!self.universe_stack.contains(&universe_id));
-    self.universe_stack.push(universe_id);
-  }
-
-  fn set_universe_stack(&mut self, universe_stack: resolution::UniverseStack) {
-    self.universe_stack = universe_stack;
-  }
-}
-
 impl<'a> visit::Visitor for SemanticCheckContext<'a> {
   fn default_value(&mut self) {
     //
@@ -162,18 +164,6 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
     }
   }
 
-  fn visit_type_def(&mut self, type_def: &ast::TypeDef) {
-    if type_def
-      .body
-      .contains_directly_recursive_types(self.symbol_table)
-      .expect(auxiliary::BUG_NAME_RESOLUTION)
-    {
-      self
-        .diagnostics
-        .push(diagnostic::Diagnostic::RecursiveType(type_def.body.clone()))
-    }
-  }
-
   fn visit_function(&mut self, function: &ast::Function) {
     self.current_function_id = Some(function.registry_id);
 
@@ -188,7 +178,7 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
     let signature_type = self
       .resolution_helper
       // TRACE: (test:generics_call_chain) THIS is the original call that leads to the fault. It's strangely from the semantic check pass? Could it be that wrong tracking of universe stack on this pass is what leads to the fault, instead of the problem being with inference/instantiation itself?
-      .resolve_by_id(&function.type_id, self.universe_stack.clone())
+      .resolve_by_id(&function.type_id)
       .expect(auxiliary::BUG_MISSING_TYPE);
 
     if function.name == lowering::ENTRY_POINT_FUNCTION_NAME {
@@ -207,7 +197,7 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
         arity_mode: types::ArityMode::Fixed,
       });
 
-      if !instantiation::InstantiationHelper::compare_by_unification(
+      if !compare_by_unification(
         // OPTIMIZE: Avoid cloning. This should be optimized on the `compare_by_unification` function, not here (as it is enforced by the function).
         signature_type.into_owned(),
         main_function_signature,
@@ -240,7 +230,7 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
         .map(|type_id| {
           self
             .resolution_helper
-            .resolve_by_id(&type_id, self.universe_stack.clone())
+            .resolve_by_id(&type_id)
             .expect(auxiliary::BUG_MISSING_TYPE)
             // OPTIMIZE: Any way to avoid cloning?
             .into_owned()
@@ -288,12 +278,12 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
   fn visit_cast(&mut self, cast: &ast::Cast) {
     let operand_type = self
       .resolution_helper
-      .resolve_by_id(&cast.operand_type_id, self.universe_stack.clone())
+      .resolve_by_id(&cast.operand_type_id)
       .expect(auxiliary::BUG_MISSING_TYPE);
 
     let cast_type = self
       .resolution_helper
-      .resolve_by_id(&cast.type_id, self.universe_stack.clone())
+      .resolve_by_id(&cast.type_id)
       .expect(auxiliary::BUG_MISSING_TYPE);
 
     fn is_valid_cast_type(ty: &types::Type) -> bool {
@@ -333,10 +323,7 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
   fn visit_tuple_indexing(&mut self, tuple_indexing: &ast::TupleIndex) {
     let tuple_general_type = self
       .resolution_helper
-      .resolve_by_id(
-        &tuple_indexing.indexed_tuple_type_id,
-        self.universe_stack.clone(),
-      )
+      .resolve_by_id(&tuple_indexing.indexed_tuple_type_id)
       .expect(auxiliary::BUG_MISSING_TYPE);
 
     let tuple_type = assert_extract!(tuple_general_type.as_ref(), types::Type::Tuple);

@@ -456,13 +456,12 @@ impl Signature {
     &self,
     return_type: types::Type,
     resolution_helper: &resolution::ResolutionHelper<'a>,
-    universe_stack: resolution::UniverseStack,
   ) -> Result<types::SignatureType, resolution::TypeResolutionByIdError> {
     let mut parameter_types = Vec::with_capacity(self.parameters.len());
 
     for parameter in &self.parameters {
       let parameter_type = resolution_helper
-        .resolve_by_id(&parameter.type_id, universe_stack.clone())?
+        .resolve_by_id(&parameter.type_id)?
         .into_owned();
 
       parameter_types.push(parameter_type);
@@ -611,7 +610,6 @@ impl Callable {
 #[derive(Debug)]
 pub struct CallSite {
   pub registry_id: symbol_table::RegistryId,
-  pub universe_id: symbol_table::UniverseId,
   pub type_id: symbol_table::TypeId,
   pub callee_expr: Expr,
   pub callee_type_id: symbol_table::TypeId,

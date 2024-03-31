@@ -63,10 +63,6 @@ impl IdGenerator {
     symbol_table::RegistryId(self.next())
   }
 
-  pub fn next_artifact_id(&mut self, debug_name: String) -> symbol_table::UniverseId {
-    symbol_table::UniverseId(self.next(), debug_name)
-  }
-
   pub fn next_type_id(&mut self) -> symbol_table::TypeId {
     symbol_table::TypeId(self.next())
   }

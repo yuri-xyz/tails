@@ -20,7 +20,7 @@ func d(x: Id<_>) -> Id<_>:
 func e(x: Id<Id<_>>) -> Id<Id<_>>:
   x
 
--- TODO: Add tests for infer types + generics.
+-- TODO: Add tests for infer types.
 
 func tests() -> unit:
   -- a

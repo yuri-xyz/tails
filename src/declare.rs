@@ -1,4 +1,4 @@
-use crate::{ast, auxiliary, diagnostic, instantiation, lowering, symbol_table, types, visit};
+use crate::{ast, auxiliary, diagnostic, lowering, symbol_table, types, visit};
 
 pub(crate) type DeclarationMap =
   std::collections::HashMap<symbol_table::Qualifier, symbol_table::Scope>;
@@ -135,15 +135,6 @@ impl<'a> visit::Visitor for DeclarationContext {
           .expect(auxiliary::BUG_REGISTRY_ITEM_MUST_BE_ITEM),
       );
     }
-  }
-
-  fn visit_call_site(&mut self, call_site: &ast::CallSite) {
-    self.symbol_table.call_site_parent_functions.insert(
-      call_site.universe_id.to_owned(),
-      self
-        .current_function_id
-        .expect("call sites should always be present inside functions"),
-    );
   }
 
   fn visit_function(&mut self, function: &ast::Function) {
