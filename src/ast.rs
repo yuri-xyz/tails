@@ -582,22 +582,6 @@ pub enum Callable {
 }
 
 impl Callable {
-  pub(crate) fn find_display_name(&self) -> Option<String> {
-    match self {
-      Callable::ForeignFunction(foreign_function) => Some(foreign_function.name.to_owned()),
-      Callable::Function(function) => Some(function.name.to_owned()),
-      Callable::Closure(closure) => Some(format!("closure#{}", closure.registry_id.0)),
-    }
-  }
-
-  pub(crate) fn get_registry_id(&self) -> symbol_table::RegistryId {
-    match self {
-      Callable::ForeignFunction(foreign_function) => foreign_function.registry_id,
-      Callable::Function(function) => function.registry_id,
-      Callable::Closure(closure) => closure.registry_id,
-    }
-  }
-
   pub(crate) fn get_signature_type(&self) -> types::SignatureType {
     match self {
       Callable::Closure(closure) => closure.signature.as_signature_type(),

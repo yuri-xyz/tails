@@ -225,18 +225,6 @@ pub(crate) struct IndirectSubtreeIterator<'a> {
   symbol_table: &'a symbol_table::SymbolTable,
 }
 
-impl<'a> IndirectSubtreeIterator<'a> {
-  fn new(ty: &Type, symbol_table: &'a symbol_table::SymbolTable) -> Self {
-    // OPTIMIZE: Avoid cloning.
-    let stack = ty.get_inner_types().cloned().collect();
-
-    IndirectSubtreeIterator {
-      stack,
-      symbol_table,
-    }
-  }
-}
-
 impl<'a> Iterator for IndirectSubtreeIterator<'a> {
   type Item = Result<Type, TypeStripError>;
 

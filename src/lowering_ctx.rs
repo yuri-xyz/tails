@@ -603,22 +603,6 @@ impl<'a, 'llvm> LoweringContext<'a, 'llvm> {
     }
   }
 
-  /// Given a polymorphic item, this function will attempt to specialize
-  /// the item, substituting the generic parameter types. The result
-  /// is a *monomorphism* (or *monomorphic item*), which is an item
-  /// whose generic parameters have been instantiated with concrete
-  /// types.
-  pub(crate) fn lower_artifact(
-    &mut self,
-    item: &ast::Item,
-  ) -> Option<inkwell::values::BasicValueEnum<'llvm>> {
-    // CONSIDER: Adding support (via an optional parameter) for access mode. Only do this if it's actually used, otherwise keep it simple.
-
-    let llvm_value = self.visit_item(item);
-
-    llvm_value
-  }
-
   /// Memoize a global string pointer literal.
   ///
   /// If the given string literal has already been memoized, this function will

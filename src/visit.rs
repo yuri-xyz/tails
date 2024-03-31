@@ -1,4 +1,4 @@
-use crate::{ast, resolution, symbol_table, types};
+use crate::{ast, types};
 
 macro_rules! define_visit_fn {
   ($method_name:ident, $type_name:ty) => {
