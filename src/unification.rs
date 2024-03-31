@@ -376,7 +376,7 @@ impl TypeUnificationContext<'_> {
     let strip_result = stub_type
       // OPTIMIZE: Avoid cloning.
       .to_owned()
-      .strip_all_monomorphic_stub_layers(self.symbol_table);
+      .strip_all_stub_layers(self.symbol_table);
 
     let stripped_target = match strip_result {
       Ok(stripped_target) => stripped_target,

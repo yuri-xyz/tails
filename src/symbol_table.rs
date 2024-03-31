@@ -125,36 +125,6 @@ impl ToString for Qualifier {
   }
 }
 
-enum SymbolMetadataFlag {
-  Inline,
-}
-
-// TODO: Make use of.
-struct SymbolLocation {
-  file_path: std::path::PathBuf,
-  position: usize,
-  length: usize,
-}
-
-// TODO: Make use of.
-struct SymbolMetadata {
-  pub location: SymbolLocation,
-  pub flags: std::collections::HashSet<SymbolMetadataFlag>,
-}
-
-// TODO: Make use of.
-struct SymbolTableEntry {
-  pub item: std::rc::Rc<ast::Item>,
-  pub visibility: Visibility,
-  pub metadata: SymbolMetadata,
-}
-
-pub enum Visibility {
-  Public,
-  Private,
-  Internal,
-}
-
 #[derive(Debug, Clone)]
 pub enum RegistryItem {
   ForeignFunction(std::rc::Rc<ast::ForeignFunction>),
@@ -163,7 +133,6 @@ pub enum RegistryItem {
   Parameter(std::rc::Rc<ast::Parameter>),
   Union(std::rc::Rc<ast::Union>),
   UnionVariant(std::rc::Rc<ast::UnionVariant>),
-  GenericType(types::GenericType),
   Binding(std::rc::Rc<ast::Binding>),
   TypeDef(std::rc::Rc<ast::TypeDef>),
   Constant(std::rc::Rc<ast::Constant>),
@@ -222,12 +191,6 @@ pub struct SymbolTable {
   /// hash map, direct access is guaranteed on subsequent phases.
   pub(crate) registry: std::collections::HashMap<RegistryId, RegistryItem>,
   pub(crate) call_site_parent_functions: std::collections::HashMap<RegistryId, RegistryId>,
-  /// A collection of owned/nested generic types by items, with the intent to provide
-  /// a direct and efficient method to acquire all the raw generic types present within
-  /// an item, without having to traverse the item to find them.
-  ///
-  /// Note that this does not include computed generics, such as anonymous generics.
-  pub(crate) nested_generics: std::collections::HashMap<RegistryId, Vec<types::GenericType>>,
 }
 
 impl SymbolTable {

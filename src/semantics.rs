@@ -177,7 +177,6 @@ impl<'a> visit::Visitor for SemanticCheckContext<'a> {
 
     let signature_type = self
       .resolution_helper
-      // TRACE: (test:generics_call_chain) THIS is the original call that leads to the fault. It's strangely from the semantic check pass? Could it be that wrong tracking of universe stack on this pass is what leads to the fault, instead of the problem being with inference/instantiation itself?
       .resolve_by_id(&function.type_id)
       .expect(auxiliary::BUG_MISSING_TYPE);
 

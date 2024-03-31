@@ -169,14 +169,6 @@ impl Expr {
       _ => None,
     }
   }
-
-  pub(crate) fn find_debug_name(&self) -> Option<String> {
-    match self.flatten() {
-      Expr::Reference(reference) => Some(&reference.path.base_name),
-      _ => None,
-    }
-    .map(|debug_name| debug_name.to_owned())
-  }
 }
 
 impl TryFrom<Expr> for symbol_table::RegistryItem {

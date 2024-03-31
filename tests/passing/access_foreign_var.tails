@@ -1,7 +1,9 @@
 foreign:
   var stdin: *int8
 
-func a<T>(x: T) -> unit:
+  func emit(...) -> unit
+
+func a(x: *int8) -> unit:
   pass
 
 func tests() -> unit:
@@ -9,5 +11,5 @@ func tests() -> unit:
     let stdinPtr: *int8 = stdin
     let stdinDeref: int8 = *stdin
 
-    a::<*int8>(stdinPtr)
-    a::<int8>(stdinDeref)
+    emit(stdinPtr)
+    emit(stdinDeref)

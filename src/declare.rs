@@ -1,4 +1,4 @@
-use crate::{ast, auxiliary, diagnostic, lowering, symbol_table, types, visit};
+use crate::{ast, auxiliary, diagnostic, lowering, symbol_table, visit};
 
 pub(crate) type DeclarationMap =
   std::collections::HashMap<symbol_table::Qualifier, symbol_table::Scope>;

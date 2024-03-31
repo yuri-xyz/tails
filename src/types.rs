@@ -92,7 +92,7 @@ impl StubType {
   /// with the corresponding error variant. However, if recursive types exist but
   /// they are nested, the function will succeed because of separation of concerns;
   /// this function is only concerned with stripping all stub type layers.
-  pub(crate) fn strip_all_monomorphic_stub_layers(
+  pub(crate) fn strip_all_stub_layers(
     self,
     symbol_table: &symbol_table::SymbolTable,
   ) -> Result<Type, TypeStripError> {
@@ -127,13 +127,6 @@ impl StubType {
 
 #[derive(Clone, Debug)]
 pub struct TupleType(pub Vec<Type>);
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct GenericType {
-  pub name: String,
-  pub registry_id: symbol_table::RegistryId,
-  pub substitution_id: symbol_table::SubstitutionId,
-}
 
 #[derive(PartialEq, PartialOrd, Copy, Clone, Debug, Eq)]
 pub enum BitWidth {
@@ -315,7 +308,7 @@ impl Type {
     // OPTIMIZE: Use `std::borrow::Cow`.
 
     if let Type::Stub(stub_type) = self {
-      stub_type.strip_all_monomorphic_stub_layers(symbol_table)
+      stub_type.strip_all_stub_layers(symbol_table)
     } else {
       Ok(self)
     }

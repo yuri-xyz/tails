@@ -8,16 +8,6 @@ pub(crate) enum TypeResolutionError {
   StubTypeMissingSymbolTableEntry,
 }
 
-impl From<types::DirectRecursionCheckError> for TypeResolutionError {
-  fn from(error: types::DirectRecursionCheckError) -> Self {
-    match error {
-      types::DirectRecursionCheckError::SymbolTableMissingEntry => {
-        TypeResolutionError::StubTypeMissingSymbolTableEntry
-      }
-    }
-  }
-}
-
 impl From<types::DirectRecursionCheckError> for TypeStripError {
   fn from(error: types::DirectRecursionCheckError) -> Self {
     match error {
@@ -88,9 +78,8 @@ impl<'a> BaseResolutionHelper<'a> {
 
     let resolution = match ty {
       types::Type::Stub(stub_type) => self.resolve_stub_type(stub_type)?,
-      // The type is not a stub, generic (at least at this layer), or a fully concrete type.
-      // In other words, the type contains a nested stub, or generic at some level on its
-      // subtree.
+      // The type is not a stub, or a fully concrete type. In other words,
+      // the type contains a nested stub  at some level on its subtree.
       _ => self.resolve_within_subtree(ty)?,
     };
 
@@ -176,7 +165,7 @@ impl<'a> BaseResolutionHelper<'a> {
     let stripped_target = stub_type
       // OPTIMIZE: Avoid cloning.
       .clone()
-      .strip_all_monomorphic_stub_layers(self.symbol_table)
+      .strip_all_stub_layers(self.symbol_table)
       .or(Err(TypeResolutionError::StubTypeMissingSymbolTableEntry))?;
 
     let resolved_target = self.resolve(&stripped_target)?;

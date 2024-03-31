@@ -1399,26 +1399,6 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
       }
     }
 
-    let callee_function = match &callee {
-      ast::Callable::Function(function) => Some(function),
-      _ => None,
-    };
-
-    // OPTIMIZE: Not used in all final branches, but cannot be made a closure because of unique access requirement to `self`.
-    let argument_types = {
-      call_site
-        .arguments
-        .iter()
-        .map(|argument| {
-          self
-            .resolution_helper
-            .resolve_by_id(&argument.type_id)
-            .map(|ty| ty.into_owned())
-            .expect(auxiliary::BUG_MISSING_TYPE)
-        })
-        .collect::<Vec<_>>()
-    };
-
     let callee_type = self
       .resolve_type_by_id(&call_site.callee_type_id)
       .into_owned();

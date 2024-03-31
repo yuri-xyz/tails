@@ -44,15 +44,6 @@ pub enum AccessMode {
   Dereference,
 }
 
-#[derive(Clone)]
-pub(crate) struct MonomorphismCacheEntry<'llvm>(
-  pub Vec<types::Type>,
-  pub inkwell::values::FunctionValue<'llvm>,
-);
-
-type MonomorphismCache<'llvm> =
-  std::collections::HashMap<symbol_table::RegistryId, Vec<MonomorphismCacheEntry<'llvm>>>;
-
 // CONSIDER: Adding `get` functions to avoid giving read-write access to properties by having them be `pub`.
 pub struct LoweringContext<'a, 'llvm> {
   pub(crate) llvm_builder: inkwell::builder::Builder<'llvm>,

@@ -51,7 +51,6 @@ impl<'a> UnificationSubstitutionHelper<'a> {
     object_type: &types::ObjectType,
   ) -> Result<types::Type, SubstitutionError> {
     if let types::ObjectKind::Open(substitution_id) = object_type.kind {
-      // SAFETY: What if it wasn't instantiated? Say, it was inside a generic function that was never called? In such a case, this shouldn't fail but the way the instantiation function is built mandates that all types have to be resolved/instantiated. Might need to change that (perhaps by returning an `Option`).
       // SAFETY: Occurs check? Or that doesn't happen here, instead only on unification?
 
       if let Some(substitution) = self.substitution_env.get(&substitution_id) {
@@ -141,8 +140,8 @@ impl<'a> UnificationSubstitutionHelper<'a> {
       }
       // TODO: Implement. Handle unions.
       types::Type::Union(..) => todo!(),
-      // The type is not a stub, generic (at least at this layer), or a fully
-      // concrete type. There is nothing to do.
+      // The type is not a stub, or a fully concrete type.
+      // There is nothing to do.
       _ => Ok(ty.to_owned()),
     }
   }
