@@ -689,9 +689,9 @@ impl Parser {
     Self::check_llvm_size(parameters.len())?;
     self.skip_one(&lexer::TokenKind::Arrow)?;
 
-    // Return type hints are required for the sake of
+    // Function return type hints are required for the sake of
     // clarity and explicitness.
-    let return_type_hint = self.parse_type()?;
+    let return_type_hint = Some(self.parse_type()?);
 
     let kind = match invoker {
       SignatureParserInvoker::ForeignFunction => ast::SignatureKind::ForeignFunction,

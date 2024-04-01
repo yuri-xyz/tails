@@ -1,5 +1,5 @@
 func a(x: int) -> int:
-  let closure = |@x| x
+  let closure = |@x| -> int: x
 
   closure()
 

@@ -1,6 +1,6 @@
 func a() -> int:
   let x: int = 222
-  let closure = |@x| x
+  let closure = |@x| -> int: x
 
   closure()
 

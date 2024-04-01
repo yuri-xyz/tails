@@ -665,7 +665,9 @@ impl Visitable for ast::Signature {
       parameter.traverse(visitor);
     }
 
-    self.return_type_hint.traverse(visitor);
+    if let Some(return_type_hint) = &self.return_type_hint {
+      return_type_hint.traverse(visitor);
+    }
   }
 }
 

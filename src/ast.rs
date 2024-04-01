@@ -1,7 +1,7 @@
 //! Contains item structures and definitions that represent the abstract
 //! syntax tree (AST) of a program.
 
-use crate::{parser, resolution, symbol_table, types};
+use crate::{parser, symbol_table, types};
 
 pub type Package = std::collections::BTreeMap<symbol_table::Qualifier, Module>;
 
@@ -428,68 +428,10 @@ pub enum SignatureKind {
 pub struct Signature {
   pub parameters: Vec<std::rc::Rc<Parameter>>,
   /// A type hint qualifying the return type of this signature.
-  pub return_type_hint: types::Type,
+  pub return_type_hint: Option<types::Type>,
   pub is_variadic: bool,
   pub kind: SignatureKind,
   pub return_type_id: symbol_table::TypeId,
-}
-
-impl Signature {
-  /// Convert this signature into a signature type.
-  ///
-  /// This will return `None` if a parameter does not have an
-  /// associated type on the given type environment.
-  pub(crate) fn as_resolved_signature_type<'a>(
-    &self,
-    return_type: types::Type,
-    resolution_helper: &resolution::ResolutionHelper<'a>,
-  ) -> Result<types::SignatureType, resolution::TypeResolutionByIdError> {
-    let mut parameter_types = Vec::with_capacity(self.parameters.len());
-
-    for parameter in &self.parameters {
-      let parameter_type = resolution_helper
-        .resolve_by_id(&parameter.type_id)?
-        .into_owned();
-
-      parameter_types.push(parameter_type);
-    }
-
-    let arity_mode = if self.is_variadic {
-      types::ArityMode::Variadic {
-        minimum_required_parameters: self.parameters.len(),
-      }
-    } else {
-      types::ArityMode::Fixed
-    };
-
-    Ok(types::SignatureType {
-      return_type: Box::new(return_type),
-      parameter_types,
-      arity_mode,
-    })
-  }
-
-  pub(crate) fn as_signature_type(&self) -> types::SignatureType {
-    let mut parameter_types = Vec::with_capacity(self.parameters.len());
-
-    for parameter in &self.parameters {
-      parameter_types.push(parameter.type_hint.clone().unwrap());
-    }
-
-    let arity_mode = if self.is_variadic {
-      types::ArityMode::Variadic {
-        minimum_required_parameters: self.parameters.len(),
-      }
-    } else {
-      types::ArityMode::Fixed
-    };
-
-    types::SignatureType {
-      return_type: Box::new(self.return_type_hint.clone()),
-      parameter_types,
-      arity_mode,
-    }
-  }
 }
 
 #[derive(Debug)]

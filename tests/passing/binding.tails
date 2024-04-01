@@ -11,8 +11,8 @@ func tests() -> unit:
   let f = "test"
   let g = if true: a else: b
   let h = true
-  let i = || 0
-  let j = || pass
+  let i = || -> int: 0
+  let j = || -> unit: pass
 
   let k = if h:
     pass

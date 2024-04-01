@@ -1,5 +1,5 @@
 use crate::{
-  symbol_table,
+  ast, symbol_table,
   types::{self, TypeStripError},
 };
 
@@ -37,6 +37,36 @@ impl<'a> ResolutionHelper<'a> {
     let base = BaseResolutionHelper::new(symbol_table);
 
     Self { base, type_env }
+  }
+
+  /// Convert this signature into a signature type.
+  pub(crate) fn resolve_signature(
+    &self,
+    signature: &ast::Signature,
+  ) -> Result<types::SignatureType, TypeResolutionByIdError> {
+    let mut parameter_types = Vec::with_capacity(signature.parameters.len());
+
+    for parameter in &signature.parameters {
+      let parameter_type = self.resolve_by_id(&parameter.type_id)?.into_owned();
+
+      parameter_types.push(parameter_type);
+    }
+
+    let arity_mode = if signature.is_variadic {
+      types::ArityMode::Variadic {
+        minimum_required_parameters: signature.parameters.len(),
+      }
+    } else {
+      types::ArityMode::Fixed
+    };
+
+    let return_type = self.resolve_by_id(&signature.return_type_id)?.into_owned();
+
+    Ok(types::SignatureType {
+      return_type: Box::new(return_type),
+      parameter_types,
+      arity_mode,
+    })
   }
 
   pub(crate) fn resolve_by_id(

@@ -1,7 +1,7 @@
 func tests() -> unit:
-  let a: () -> int = || 0
-  let b: () -> unit = || pass
-  let c: (unit) -> unit = |x| pass
+  let a: () -> int = || -> int: 0
+  let b: () -> unit = || -> unit: pass
+  let c: (unit) -> unit = |x| -> unit: pass
   let d: (unit) -> unit = |x: unit| pass
   let e: (()) -> unit = |x| pass
   let f: (()) -> unit = |x: ()| pass

@@ -1041,12 +1041,9 @@ impl<'a, 'llvm> visit::Visitor<Option<inkwell::values::BasicValueEnum<'llvm>>>
       "the same foreign function should not be lowered twice"
     );
 
-    let signature_type = foreign_fn
-      .signature
-      .as_resolved_signature_type(
-        foreign_fn.signature.return_type_hint.to_owned(),
-        self.resolution_helper,
-      )
+    let signature_type = self
+      .resolution_helper
+      .resolve_signature(&foreign_fn.signature)
       .expect(auxiliary::BUG_MISSING_TYPE);
 
     let llvm_signature_type = self.lower_signature_type(&signature_type, None);
