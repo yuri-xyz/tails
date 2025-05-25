@@ -1,7 +1,119 @@
 use crate::{assert_extract, ast, auxiliary, symbol_table, types};
 
 #[derive(Clone, Debug)]
-pub(crate) struct InferenceResult {
+pub enum InferenceError {
+  UnificationFailure {
+    expected: types::Type,
+    actual: types::Type,
+    context: String,
+  },
+  UnboundVariable {
+    name: String,
+    location: String,
+  },
+  CyclicType {
+    ty: types::Type,
+  },
+  ArityMismatch {
+    expected: usize,
+    actual: usize,
+    function_name: Option<String>,
+  },
+  MissingSymbolTableEntry {
+    id: String,
+    context: String,
+  },
+  InvalidCallable {
+    expr_type: String,
+    context: String,
+  },
+  TypeResolutionFailure {
+    type_name: String,
+    reason: String,
+  },
+}
+
+impl std::fmt::Display for InferenceError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      InferenceError::UnificationFailure {
+        expected,
+        actual,
+        context,
+      } => {
+        write!(
+          f,
+          "Type mismatch in {}: expected {:?}, found {:?}",
+          context, expected, actual
+        )
+      }
+      InferenceError::UnboundVariable { name, location } => {
+        write!(f, "Unbound variable '{}' in {}", name, location)
+      }
+      InferenceError::CyclicType { ty } => {
+        write!(f, "Cyclic type detected: {:?}", ty)
+      }
+      InferenceError::ArityMismatch {
+        expected,
+        actual,
+        function_name,
+      } => match function_name {
+        Some(name) => write!(
+          f,
+          "Function '{}' expects {} arguments, got {}",
+          name, expected, actual
+        ),
+        None => write!(
+          f,
+          "Arity mismatch: expected {} arguments, got {}",
+          expected, actual
+        ),
+      },
+      InferenceError::MissingSymbolTableEntry { id, context } => {
+        write!(f, "Missing symbol table entry for '{}' in {}", id, context)
+      }
+      InferenceError::InvalidCallable { expr_type, context } => {
+        write!(
+          f,
+          "Expression of type '{}' is not callable in {}",
+          expr_type, context
+        )
+      }
+      InferenceError::TypeResolutionFailure { type_name, reason } => {
+        write!(f, "Failed to resolve type '{}': {}", type_name, reason)
+      }
+    }
+  }
+}
+
+impl std::error::Error for InferenceError {}
+
+pub type InferenceResult<T> = Result<T, Vec<InferenceError>>;
+
+pub(crate) fn single_error<T>(error: InferenceError) -> InferenceResult<T> {
+  Err(vec![error])
+}
+
+pub(crate) fn combine_results<T, U, F>(
+  result1: InferenceResult<T>,
+  result2: InferenceResult<U>,
+  combiner: F,
+) -> InferenceResult<(T, U)>
+where
+  F: FnOnce(T, U) -> (T, U),
+{
+  match (result1, result2) {
+    (Ok(t), Ok(u)) => Ok(combiner(t, u)),
+    (Err(mut errors1), Err(errors2)) => {
+      errors1.extend(errors2);
+      Err(errors1)
+    }
+    (Err(errors), _) | (_, Err(errors)) => Err(errors),
+  }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct InferenceResultData {
   pub constraints: Vec<Constraint>,
   pub type_var_substitutions: symbol_table::SubstitutionEnv,
   pub type_env: symbol_table::TypeEnvironment,
@@ -80,11 +192,16 @@ impl<'a> InferenceContext<'a> {
     &mut self,
     signature: &ast::Signature,
   ) -> types::SignatureType {
+    let return_type = signature
+      .return_type_hint
+      .as_ref()
+      .expect("return type hint should be present")
+      .clone();
+
     // SAFETY: Should there be a debugging assertion ensuring that the signature's return type id has no corresponding entry on the type environment? But, if the function is inferred more than once, it would be indeed inserted multiple times. If so, make a note here of that fact.
-    self.type_env.insert(
-      signature.return_type_id,
-      signature.return_type_hint.to_owned(),
-    );
+    self
+      .type_env
+      .insert(signature.return_type_id, return_type.clone());
 
     let parameter_types = signature
       .parameters
@@ -98,7 +215,7 @@ impl<'a> InferenceContext<'a> {
       // variadic status should remain as non-variadic.
       arity_mode: types::ArityMode::Fixed,
       parameter_types,
-      return_type: Box::new(signature.return_type_hint.to_owned()),
+      return_type: Box::new(return_type),
     }
   }
 
@@ -162,14 +279,17 @@ impl<'a> InferenceContext<'a> {
     type_variable
   }
 
-  pub(crate) fn transient(&self, inferable: &impl Infer<'a>) -> InferenceResult {
+  pub(crate) fn transient(
+    &self,
+    inferable: &impl Infer<'a>,
+  ) -> InferenceResult<InferenceResultData> {
     let mut context = self.inherit();
     let result = inferable.infer(&context);
     let ty = result.ty.clone();
 
     context.extend(result);
 
-    context.finalize(ty)
+    Ok(context.finalize(ty))
   }
 
   pub(crate) fn visit(&mut self, inferable: &impl Infer<'a>) -> types::Type {
@@ -221,11 +341,11 @@ impl<'a> InferenceContext<'a> {
     self.add_other_constraint(Constraint::Equality(type_a, type_b))
   }
 
-  pub(crate) fn finalize(self, ty: types::Type) -> InferenceResult {
+  pub(crate) fn finalize(self, ty: types::Type) -> InferenceResultData {
     // TODO: Handle result type.
     let stripped_type = ty.try_strip_all_stub_layers(self.symbol_table).unwrap();
 
-    InferenceResult {
+    InferenceResultData {
       constraints: self.constraints,
       type_var_substitutions: self.type_var_substitutions,
       type_env: self.type_env,
@@ -234,7 +354,7 @@ impl<'a> InferenceContext<'a> {
     }
   }
 
-  fn extend(&mut self, other: InferenceResult) {
+  fn extend(&mut self, other: InferenceResultData) {
     // SAFETY: If it is valid/possible for the API to accept an 'older' context, then this assertion should be replaced with a `Result` type. Or if we're assuming that this would always be a logic bug, add a note. Also it is missing the reasoning message.
     assert!(other.id_count >= self.id_generator.get_counter());
 
@@ -264,66 +384,75 @@ pub enum Constraint {
 }
 
 pub(crate) trait Infer<'a> {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    // Default implementations to unit type.
-    parent.inherit().finalize(types::Type::Unit)
-  }
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData;
 }
 
 impl Infer<'_> for ast::Expr {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     match self {
-      ast::Expr::BinaryOp(binary_op) => parent.transient(binary_op.as_ref()),
-      ast::Expr::CallSite(call_site) => parent.transient(call_site.as_ref()),
-      ast::Expr::Cast(cast) => parent.transient(cast.as_ref()),
-      ast::Expr::UnaryOp(unary_op) => parent.transient(unary_op.as_ref()),
-      ast::Expr::Literal(literal) => parent.transient(literal),
-      ast::Expr::Object(object) => parent.transient(object.as_ref()),
-      ast::Expr::Unsafe(unsafe_) => parent.transient(unsafe_.as_ref()),
-      ast::Expr::ObjectAccess(object_access) => parent.transient(object_access.as_ref()),
-      ast::Expr::Tuple(tuple) => parent.transient(tuple.as_ref()),
-      ast::Expr::TupleIndexing(tuple_indexing) => parent.transient(tuple_indexing.as_ref()),
-      ast::Expr::Reference(reference) => parent.transient(reference.as_ref()),
-      ast::Expr::Sizeof(sizeof) => parent.transient(sizeof.as_ref()),
-      ast::Expr::Match(match_) => parent.transient(match_.as_ref()),
-      ast::Expr::Group(group) => parent.transient(group.as_ref()),
-      ast::Expr::Discard(discard) => parent.transient(discard.as_ref()),
-      ast::Expr::PointerIndexing(pointer_indexing) => parent.transient(pointer_indexing.as_ref()),
+      ast::Expr::BinaryOp(binary_op) => parent.transient(binary_op.as_ref()).unwrap(),
+      ast::Expr::CallSite(call_site) => parent.transient(call_site.as_ref()).unwrap(),
+      ast::Expr::Cast(cast) => parent.transient(cast.as_ref()).unwrap(),
+      ast::Expr::UnaryOp(unary_op) => parent.transient(unary_op.as_ref()).unwrap(),
+      ast::Expr::Literal(literal) => parent.transient(literal).unwrap(),
+      ast::Expr::Object(object) => parent.transient(object.as_ref()).unwrap(),
+      ast::Expr::Unsafe(unsafe_) => parent.transient(unsafe_.as_ref()).unwrap(),
+      ast::Expr::ObjectAccess(object_access) => parent.transient(object_access.as_ref()).unwrap(),
+      ast::Expr::Tuple(tuple) => parent.transient(tuple.as_ref()).unwrap(),
+      ast::Expr::TupleIndexing(tuple_indexing) => {
+        parent.transient(tuple_indexing.as_ref()).unwrap()
+      }
+      ast::Expr::Reference(reference) => parent.transient(reference.as_ref()).unwrap(),
+      ast::Expr::Sizeof(sizeof) => parent.transient(sizeof.as_ref()).unwrap(),
+      ast::Expr::Match(match_) => parent.transient(match_.as_ref()).unwrap(),
+      ast::Expr::Group(group) => parent.transient(group.as_ref()).unwrap(),
+      ast::Expr::Discard(discard) => parent.transient(discard.as_ref()).unwrap(),
+      ast::Expr::PointerIndexing(pointer_indexing) => {
+        parent.transient(pointer_indexing.as_ref()).unwrap()
+      }
       ast::Expr::Pass(..) => parent.inherit().finalize(types::Type::Unit),
-      ast::Expr::If(if_) => parent.transient(if_.as_ref()),
-      ast::Expr::Closure(closure) => parent.transient(closure.as_ref()),
-      ast::Expr::Statement(statement) => parent.transient(statement.as_ref()),
-      ast::Expr::UnionInstance(union_instance) => parent.transient(union_instance.as_ref()),
-      ast::Expr::Block(block) => parent.transient(block.as_ref()),
-      ast::Expr::With(with) => parent.transient(with.as_ref()),
+      ast::Expr::If(if_) => parent.transient(if_.as_ref()).unwrap(),
+      ast::Expr::Closure(closure) => parent.transient(closure.as_ref()).unwrap(),
+      ast::Expr::Statement(statement) => parent.transient(statement.as_ref()).unwrap(),
+      ast::Expr::UnionInstance(union_instance) => {
+        parent.transient(union_instance.as_ref()).unwrap()
+      }
+      ast::Expr::Block(block) => parent.transient(block.as_ref()).unwrap(),
+      ast::Expr::With(with) => parent.transient(with.as_ref()).unwrap(),
     }
   }
 }
 
 impl Infer<'_> for ast::Item {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     match self {
-      ast::Item::Binding(binding) => parent.transient(binding.as_ref()),
-      ast::Item::ForeignVar(foreign_var) => parent.transient(foreign_var.as_ref()),
-      ast::Item::Function(function) => parent.transient(function.as_ref()),
-      ast::Item::Import(import) => parent.transient(import.as_ref()),
-      ast::Item::Union(union) => parent.transient(union.as_ref()),
-      ast::Item::UnionVariant(union_variant) => parent.transient(union_variant.as_ref()),
-      ast::Item::TypeDef(type_def) => parent.transient(type_def.as_ref()),
-      ast::Item::Constant(constant) => parent.transient(constant.as_ref()),
-      ast::Item::ClosureCapture(closure_capture) => parent.transient(closure_capture.as_ref()),
-      ast::Item::ForeignCluster(foreign_cluster) => parent.transient(foreign_cluster.as_ref()),
-      ast::Item::ForeignFunction(foreign_function) => parent.transient(foreign_function.as_ref()),
-      ast::Item::Parameter(parameter) => parent.transient(parameter.as_ref()),
+      ast::Item::Binding(binding) => parent.transient(binding.as_ref()).unwrap(),
+      ast::Item::ForeignVar(foreign_var) => parent.transient(foreign_var.as_ref()).unwrap(),
+      ast::Item::Function(function) => parent.transient(function.as_ref()).unwrap(),
+      ast::Item::Import(import) => parent.transient(import.as_ref()).unwrap(),
+      ast::Item::Union(union) => parent.transient(union.as_ref()).unwrap(),
+      ast::Item::UnionVariant(union_variant) => parent.transient(union_variant.as_ref()).unwrap(),
+      ast::Item::TypeDef(type_def) => parent.transient(type_def.as_ref()).unwrap(),
+      ast::Item::Constant(constant) => parent.transient(constant.as_ref()).unwrap(),
+      ast::Item::ClosureCapture(closure_capture) => {
+        parent.transient(closure_capture.as_ref()).unwrap()
+      }
+      ast::Item::ForeignCluster(foreign_cluster) => {
+        parent.transient(foreign_cluster.as_ref()).unwrap()
+      }
+      ast::Item::ForeignFunction(foreign_function) => {
+        parent.transient(foreign_function.as_ref()).unwrap()
+      }
+      ast::Item::Parameter(parameter) => parent.transient(parameter.as_ref()).unwrap(),
       ast::Item::PointerAssignment(pointer_assignment) => {
-        parent.transient(pointer_assignment.as_ref())
+        parent.transient(pointer_assignment.as_ref()).unwrap()
       }
     }
   }
 }
 
 impl Infer<'_> for ast::With {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let ty = context.visit(&self.object);
 
@@ -335,7 +464,7 @@ impl Infer<'_> for ast::With {
 }
 
 impl Infer<'_> for ast::Parameter {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let ty = context.infer_parameter(self);
 
@@ -344,15 +473,26 @@ impl Infer<'_> for ast::Parameter {
 }
 
 impl Infer<'_> for ast::Import {
-  //
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
+    parent.inherit().finalize(types::Type::Unit)
+  }
 }
 
 impl Infer<'_> for ast::Union {
-  //
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
+    // Since we receive &Union but need Rc<Union>, we need to create a new Rc
+    // This is a limitation of the current design - ideally we'd work with Rc throughout
+    let union_rc = std::rc::Rc::new(ast::Union {
+      registry_id: self.registry_id,
+      name: self.name.clone(),
+      variants: self.variants.clone(),
+    });
+    parent.inherit().finalize(types::Type::Union(union_rc))
+  }
 }
 
 impl Infer<'_> for ast::BinaryOp {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     let ty = match self.operator {
@@ -409,7 +549,7 @@ impl Infer<'_> for ast::BinaryOp {
 }
 
 impl Infer<'_> for ast::ForeignCluster {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     for foreign in &self.foreigns {
@@ -421,7 +561,7 @@ impl Infer<'_> for ast::ForeignCluster {
 }
 
 impl Infer<'_> for ast::ClosureCapture {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let ty = context.visit_target_via_link(&self.target_link_id).unwrap();
 
@@ -432,7 +572,7 @@ impl Infer<'_> for ast::ClosureCapture {
 }
 
 impl Infer<'_> for ast::Constant {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     context.constrain(self.value.as_ref(), self.ty.to_owned());
@@ -442,7 +582,7 @@ impl Infer<'_> for ast::Constant {
 }
 
 impl Infer<'_> for ast::UnionVariant {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let context = parent.inherit();
 
     let union_item = context
@@ -458,7 +598,7 @@ impl Infer<'_> for ast::UnionVariant {
 }
 
 impl Infer<'_> for ast::PointerAssignment {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let pointee_type = context.create_type_variable("pointer_assignment.pointer.pointee");
     let pointer_type = types::Type::Pointer(Box::new(pointee_type.clone()));
@@ -471,7 +611,7 @@ impl Infer<'_> for ast::PointerAssignment {
 }
 
 impl Infer<'_> for ast::PointerIndexing {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let ty = context.visit(&self.pointer);
 
@@ -490,7 +630,7 @@ impl Infer<'_> for ast::PointerIndexing {
 }
 
 impl Infer<'_> for ast::Discard {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     context.visit(&self.0);
@@ -500,7 +640,7 @@ impl Infer<'_> for ast::Discard {
 }
 
 impl Infer<'_> for ast::TupleIndex {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let tuple_type = context.create_type_variable("tuple.access");
     let element_type = context.create_type_variable("tuple.access.element");
@@ -524,7 +664,7 @@ impl Infer<'_> for ast::TupleIndex {
 }
 
 impl Infer<'_> for ast::UnionInstance {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let value_type = context.create_type_variable("union_instance.value");
 
@@ -570,7 +710,7 @@ impl Infer<'_> for ast::UnionInstance {
 }
 
 impl Infer<'_> for ast::Tuple {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     let element_types = self
@@ -588,13 +728,13 @@ impl Infer<'_> for ast::Tuple {
 }
 
 impl Infer<'_> for ast::ForeignStatic {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     parent.inherit().finalize(self.ty.clone())
   }
 }
 
 impl Infer<'_> for ast::Range {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     parent
       .inherit()
       .finalize(types::Type::Range(self.start, self.end))
@@ -602,13 +742,13 @@ impl Infer<'_> for ast::Range {
 }
 
 impl Infer<'_> for ast::TypeDef {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     parent.inherit().finalize(self.body.to_owned())
   }
 }
 
 impl Infer<'_> for ast::Block {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     for statement in &self.statements {
@@ -627,7 +767,7 @@ impl Infer<'_> for ast::Block {
 }
 
 impl Infer<'_> for ast::Statement {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     match self {
@@ -644,7 +784,7 @@ impl Infer<'_> for ast::Statement {
 }
 
 impl Infer<'_> for ast::Function {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let signature_type = context.create_signature_type(&self.signature);
 
@@ -665,7 +805,7 @@ impl Infer<'_> for ast::Function {
 }
 
 impl Infer<'_> for ast::Reference {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let ty = context.visit_target_via_link(&self.path.link_id).unwrap();
 
@@ -676,7 +816,7 @@ impl Infer<'_> for ast::Reference {
 }
 
 impl Infer<'_> for ast::Literal {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     let ty = match &self.kind {
@@ -717,7 +857,7 @@ impl Infer<'_> for ast::Literal {
 }
 
 impl Infer<'_> for ast::Cast {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let operand_type = context.visit(&self.operand);
 
@@ -734,7 +874,7 @@ impl Infer<'_> for ast::Cast {
 }
 
 impl Infer<'_> for ast::Binding {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     let value_type = if let Some(type_hint) = &self.type_hint {
@@ -755,7 +895,7 @@ impl Infer<'_> for ast::Binding {
 }
 
 impl Infer<'_> for ast::UnaryOp {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     let operand_type = match &self.operator {
@@ -798,7 +938,7 @@ impl Infer<'_> for ast::UnaryOp {
 }
 
 impl Infer<'_> for ast::If {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     // Conditions must always be of type boolean.
     const CONDITION_TYPE: types::Type = types::Type::Primitive(types::PrimitiveType::Bool);
 
@@ -833,28 +973,26 @@ impl Infer<'_> for ast::If {
 }
 
 impl Infer<'_> for ast::Unsafe {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    parent.transient(&self.0)
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
+    parent.transient(&self.0).unwrap()
   }
 }
 
 impl Infer<'_> for ast::CallSite {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    // TODO: Handle variadic functions more explicitly and carefully here.
-
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
-    // BUG: The assumption that the callee is a callable will not always hold true by this point; unification hasn't yet occurred! This will panic if the callee is indeed not a callable, instead of being more graceful with a diagnostic.
     let callee = self.strip_callee(context.symbol_table).unwrap();
 
     let callee_arity_mode = context.determine_arity_mode_for_callable(&callee);
-    let callee_signature_type = callee.get_signature_type();
+    let callee_signature = callee.get_signature_type();
 
-    let callee_return_type = callee_signature_type
-      .return_type
-      .to_owned()
+    let callee_return_type = callee_signature
+      .return_type_hint
+      .as_ref()
+      .expect("return type hint should be present")
+      .clone()
       .try_strip_all_stub_layers(context.symbol_table)
-      // TODO: Properly handle result.
       .unwrap();
 
     context
@@ -885,14 +1023,12 @@ impl Infer<'_> for ast::CallSite {
 
     context.constrain(&self.callee_expr, callee_type);
 
-    // The type of the call expression is that of the callee's return
-    // type.
     context.finalize(callee_return_type)
   }
 }
 
 impl Infer<'_> for ast::ForeignFunction {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     for parameter in &self.signature.parameters {
@@ -905,7 +1041,12 @@ impl Infer<'_> for ast::ForeignFunction {
       context.type_env.insert(parameter.type_id, parameter_type);
     }
 
-    let return_type = self.signature.return_type_hint.to_owned();
+    let return_type = self
+      .signature
+      .return_type_hint
+      .as_ref()
+      .expect(auxiliary::BUG_FOREIGN_FN_TYPE_HINTS)
+      .to_owned();
 
     let parameter_types = self
       .signature
@@ -942,7 +1083,7 @@ impl Infer<'_> for ast::ForeignFunction {
 }
 
 impl Infer<'_> for ast::Sizeof {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     // NOTE: The type of the argument is irrelevant, since it is syntactically
     // guaranteed to be a type.
 
@@ -960,7 +1101,7 @@ impl Infer<'_> for ast::Sizeof {
 }
 
 impl Infer<'_> for ast::ObjectAccess {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let ty = context.create_type_variable("object_access.member");
 
@@ -982,7 +1123,7 @@ impl Infer<'_> for ast::ObjectAccess {
 }
 
 impl Infer<'_> for ast::Closure {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let signature_type = context.create_signature_type(&self.signature);
 
@@ -1005,7 +1146,7 @@ impl Infer<'_> for ast::Closure {
 }
 
 impl Infer<'_> for ast::Object {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
 
     let fields = self
@@ -1033,7 +1174,7 @@ impl Infer<'_> for ast::Object {
 }
 
 impl Infer<'_> for ast::Match {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
     let mut context = parent.inherit();
     let ty = context.create_type_variable("match.value");
     let subject_type = context.visit(&self.subject);
@@ -1059,7 +1200,7 @@ impl Infer<'_> for ast::Match {
 }
 
 impl Infer<'_> for ast::Group {
-  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResult {
-    parent.transient(&self.0)
+  fn infer(&self, parent: &InferenceContext<'_>) -> InferenceResultData {
+    parent.transient(&self.0).unwrap()
   }
 }

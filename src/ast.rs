@@ -510,16 +510,6 @@ pub enum Callable {
   ForeignFunction(std::rc::Rc<ForeignFunction>),
 }
 
-impl Callable {
-  pub(crate) fn get_signature_type(&self) -> types::SignatureType {
-    match self {
-      Callable::Closure(closure) => closure.signature.as_signature_type(),
-      Callable::Function(function) => function.signature.as_signature_type(),
-      Callable::ForeignFunction(foreign_function) => foreign_function.signature.as_signature_type(),
-    }
-  }
-}
-
 #[derive(Debug)]
 pub struct CallSite {
   pub registry_id: symbol_table::RegistryId,
@@ -568,6 +558,16 @@ impl CallSite {
         debug_iterations < MAX_DEBUG_ITERATIONS,
         "possible infinite loop detected"
       );
+    }
+  }
+}
+
+impl Callable {
+  pub fn get_signature_type(&self) -> std::rc::Rc<Signature> {
+    match self {
+      Callable::Closure(closure) => closure.signature.clone(),
+      Callable::Function(function) => function.signature.clone(),
+      Callable::ForeignFunction(foreign_function) => foreign_function.signature.clone(),
     }
   }
 }
